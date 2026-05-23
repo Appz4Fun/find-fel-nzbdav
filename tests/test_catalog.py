@@ -11,6 +11,11 @@ def test_normalize_catalog_title_strips_4k_bluray_suffix_and_article():
     assert normalize_catalog_title("The Deer Hunter 4K Blu-ray") == "deer hunter"
 
 
+def test_normalize_catalog_title_strips_compound_uhd_suffixes():
+    assert normalize_catalog_title("The Deer Hunter 4K Ultra HD Blu-ray") == "deer hunter"
+    assert normalize_catalog_title("The Deer Hunter UHD Blu-ray") == "deer hunter"
+
+
 def test_normalize_catalog_title_normalizes_punctuation_to_spaces():
     assert normalize_catalog_title("Spider-Man: No Way Home") == "spider man no way home"
 

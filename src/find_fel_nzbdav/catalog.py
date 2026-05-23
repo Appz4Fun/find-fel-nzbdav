@@ -36,7 +36,9 @@ class CatalogTitle:
 
 
 _FORMAT_SUFFIX_RE = re.compile(
-    r"(?:[\s:,-]+)?(?:4k\s+blu[-\s]?ray|blu[-\s]?ray|uhd|ultra\s+hd)\s*$",
+    r"(?:[\s:,-]+)?(?:4k\s+ultra\s+hd\s+blu[-\s]?ray|"
+    r"4k\s+uhd\s+blu[-\s]?ray|uhd\s+blu[-\s]?ray|ultra\s+hd\s+blu[-\s]?ray|"
+    r"4k\s+blu[-\s]?ray|blu[-\s]?ray|uhd|ultra\s+hd|4k)\s*$",
     re.IGNORECASE,
 )
 
