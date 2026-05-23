@@ -6,6 +6,7 @@ import datetime
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Sequence
 
 from bluray_com import BlurayComSource
@@ -115,6 +116,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--poll-interval", type=float, default=None)
     parser.add_argument("--probe-seconds", type=int, default=10)
+    parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument("--retry-wait", type=float, default=10.0)
+    parser.add_argument("--max-consecutive-failures", type=int, default=3)
     return parser
 
 
@@ -187,19 +191,20 @@ def main(
     print(f"logging to {log_path}", file=sys.stderr)
 
     has_definitive_verdict = False
+    consecutive_failures = 0
+    aborted = False
     with log_path.open("a", encoding="utf-8") as log_file:
         for index, title in enumerate(titles):
-            try:
-                result = check_title(
-                    title,
-                    hydra,
-                    nzbdav,
-                    webdav,
-                    probe,
-                    max_candidates=config.max_candidates,
-                )
-            except Exception as exc:
-                result = TitleResult.unknown(title, f"error_{type(exc).__name__}")
+            result, failed = _check_with_retries(
+                title,
+                hydra,
+                nzbdav,
+                webdav,
+                probe,
+                max_candidates=config.max_candidates,
+                retries=args.retries,
+                retry_wait=args.retry_wait,
+            )
 
             if args.json_output:
                 print(render_json(result), flush=True)
@@ -214,6 +219,22 @@ def main(
             if result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
                 has_definitive_verdict = True
 
+            if failed:
+                consecutive_failures += 1
+                if consecutive_failures >= args.max_consecutive_failures:
+                    remaining = len(titles) - index - 1
+                    print(
+                        f"aborting: {consecutive_failures} consecutive failures "
+                        f"({remaining} titles unprocessed)",
+                        file=sys.stderr,
+                    )
+                    aborted = True
+                    break
+            else:
+                consecutive_failures = 0
+
+    if aborted:
+        return 3
     return 0 if has_definitive_verdict else 2
 
 
@@ -241,6 +262,48 @@ def main_catalog(argv: Sequence[str] | None = None, *, catalog_source=None) -> i
     else:
         print(output)
     return 0
+
+
+def _check_with_retries(
+    title: str,
+    hydra,
+    nzbdav,
+    webdav,
+    probe,
+    *,
+    max_candidates: int,
+    retries: int,
+    retry_wait: float,
+) -> tuple[TitleResult, bool]:
+    attempts = max(1, retries + 1)
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            result = check_title(
+                title,
+                hydra,
+                nzbdav,
+                webdav,
+                probe,
+                max_candidates=max_candidates,
+            )
+            return result, False
+        except Exception as exc:
+            last_exc = exc
+            if attempt < attempts:
+                wait = retry_wait * attempt
+                print(
+                    f"{title}: {type(exc).__name__} on attempt {attempt}/{attempts}, "
+                    f"retrying in {wait:.0f}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(wait)
+    assert last_exc is not None
+    return (
+        TitleResult.unknown(title, f"error_{type(last_exc).__name__}"),
+        True,
+    )
 
 
 def render_json(result: TitleResult) -> str:
