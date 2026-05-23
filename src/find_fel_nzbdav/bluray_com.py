@@ -33,6 +33,16 @@ _COUNTRY_SUFFIX_RE = re.compile(r"\s*\(([^()]*)\)\s*$")
 _FORMAT_SUFFIX_RE = re.compile(r"(?:[\s:,-]+)?4K\s+Blu[-\s]?ray\s*$", re.IGNORECASE)
 _HDR_LINE_RE = re.compile(r"^HDR\s*:\s*(.+)$", re.IGNORECASE)
 _FOUR_K_RE = re.compile(r"\b(?:4K|2160p|4K\s+Ultra\s+HD|Ultra\s+HD)\b", re.IGNORECASE)
+_OBVIOUS_TV_RELEASE_RE = re.compile(
+    r"\b(?:"
+    r"season\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+    r"nineteen|twenty)"
+    r"|complete\s+(?:series|season)"
+    r"|series\s+\d+"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 class TextHttpClient(Protocol):
@@ -137,7 +147,11 @@ class BlurayComSource:
             for detail_url in parse_search_results(search_html):
                 detail_html = self.fetch_text(detail_url)
                 release = parse_release_detail(detail_url, detail_html)
-                if release.is_4k and release.is_dolby_vision:
+                if (
+                    release.is_4k
+                    and release.is_dolby_vision
+                    and not _is_obvious_tv_release(release)
+                ):
                     releases.append(release)
         return releases
 
@@ -176,7 +190,17 @@ class BlurayComSource:
 
 
 class _SectionParser(HTMLParser):
-    _HEADINGS = {"h1", "h2", "h3", "h4", "strong", "b"}
+    _HEADINGS = {"h1", "h2", "h3", "h4"}
+    _INLINE_OR_HEADING = {"strong", "b"}
+    _KNOWN_SECTION_HEADINGS = {
+        "video",
+        "disc",
+        "discs",
+        "studio",
+        "release date",
+        "edition",
+        "year",
+    }
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -199,7 +223,11 @@ class _SectionParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:
         tag = tag.lower()
-        if tag in self._HEADINGS or _is_subheading_span(tag, attrs):
+        if (
+            tag in self._HEADINGS
+            or tag in self._INLINE_OR_HEADING
+            or _is_subheading_span(tag, attrs)
+        ):
             self._capturing_heading = tag
             self._heading_parts = []
         elif tag == "br":
@@ -208,11 +236,15 @@ class _SectionParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if self._capturing_heading == tag:
-            heading = _normalize_space(" ".join(self._heading_parts)).lower()
+            raw_heading = _normalize_space(" ".join(self._heading_parts))
+            heading = raw_heading.lower()
             if heading:
-                self._flush_line()
-                self._current_heading = heading
-                self.sections.setdefault(heading, [])
+                if tag in self._INLINE_OR_HEADING and not self._is_section_heading(heading):
+                    self._line_parts.append(raw_heading)
+                else:
+                    self._flush_line()
+                    self._current_heading = heading
+                    self.sections.setdefault(heading, [])
             self._capturing_heading = None
             self._heading_parts = []
         elif tag in {"p", "div", "li", "tr"}:
@@ -233,6 +265,9 @@ class _SectionParser(HTMLParser):
         if line:
             self.sections.setdefault(self._current_heading, []).append(line)
         self._line_parts = []
+
+    def _is_section_heading(self, heading: str) -> bool:
+        return not heading.endswith(":") and heading in self._KNOWN_SECTION_HEADINGS
 
 
 def _extract_display_title(html: str) -> str:
@@ -352,6 +387,11 @@ def _extract_hdr(video: str | None) -> str | None:
 def _extract_year(text: str) -> int | None:
     match = _YEAR_RE.search(text)
     return int(match.group(1)) if match else None
+
+
+def _is_obvious_tv_release(release: CatalogRelease) -> bool:
+    text = " ".join(part for part in (release.title, release.edition) if part)
+    return bool(_OBVIOUS_TV_RELEASE_RE.search(text))
 
 
 def _normalize_space(text: str) -> str:

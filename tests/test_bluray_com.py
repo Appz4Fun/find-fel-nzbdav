@@ -101,6 +101,27 @@ def test_parse_release_detail_supports_bluray_com_subheading_spans():
     assert release.is_dolby_vision is True
 
 
+def test_parse_release_detail_keeps_bold_field_labels_inside_video_section():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/Bold-Labels-4K-Blu-ray/410868/",
+        """
+        <meta property="og:title" content="Bold Labels 4K Blu-ray (United States)" />
+        <span class="subheading">Video</span><br>
+        <b>Codec:</b> HEVC / H.265<br>
+        <b>Resolution:</b> 2160p<br>
+        <b>HDR:</b> Dolby Vision, HDR10<br>
+        <span class="subheading">Discs</span><br>
+        <strong>Disc:</strong> 4K Ultra HD<br>
+        """,
+    )
+
+    assert release.video == "Codec: HEVC / H.265\nResolution: 2160p\nHDR: Dolby Vision, HDR10"
+    assert release.discs == "Disc: 4K Ultra HD"
+    assert release.hdr == "Dolby Vision, HDR10"
+    assert release.is_4k is True
+    assert release.is_dolby_vision is True
+
+
 def test_parse_release_detail_prefers_h1_flag_and_title_metadata_over_og_edition():
     release = parse_release_detail(
         "https://www.blu-ray.com/movies/28-Days-Later-4K-Blu-ray/410867/",
@@ -239,6 +260,41 @@ def test_discover_releases_fetches_pages_and_filters_to_4k_dolby_vision():
 
     assert [release.source_id for release in releases] == ["10"]
     assert http.calls == [search_url, good_url, hdr10_url, non4k_url]
+
+
+def test_discover_releases_filters_obvious_tv_season_releases():
+    search_url = build_search_url(page=1)
+    movie_url = "https://www.blu-ray.com/movies/Good-Movie-4K-Blu-ray/20/"
+    season_url = "https://www.blu-ray.com/movies/Fallout-Season-Two-4K-Blu-ray/21/"
+    series_url = "https://www.blu-ray.com/movies/The-Show-The-Complete-Series-4K-Blu-ray/22/"
+    responses = {
+        search_url: f"""
+            <a href="{movie_url}">Good Movie</a>
+            <a href="{season_url}">Fallout: Season Two</a>
+            <a href="{series_url}">The Show: The Complete Series</a>
+        """,
+        movie_url: """
+            <meta property="og:title" content="Good Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+        season_url: """
+            <meta property="og:title" content="Fallout: Season Two 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+        series_url: """
+            <meta property="og:title" content="The Show: The Complete Series 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+    }
+    http = FakeHttp(responses)
+
+    releases = BlurayComSource(http=http, delay_seconds=0).discover_releases(pages=1)
+
+    assert [release.title for release in releases] == ["Good Movie"]
+    assert http.calls == [search_url, movie_url, season_url, series_url]
 
 
 def test_discover_releases_supports_zero_pages():
