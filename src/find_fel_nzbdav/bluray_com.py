@@ -140,7 +140,13 @@ class BlurayComSource:
     def fetch_text(self, url: str) -> str:
         cache_path = self._cache_path(url)
         if cache_path is not None and cache_path.exists():
-            return cache_path.read_text(encoding="utf-8")
+            cached_text = cache_path.read_text(encoding="utf-8")
+            try:
+                _validate_response_text(url, cached_text)
+            except ValueError:
+                cache_path.unlink(missing_ok=True)
+                raise
+            return cached_text
 
         text = self.http.get_text(url, timeout=self.timeout)
         _validate_response_text(url, text)

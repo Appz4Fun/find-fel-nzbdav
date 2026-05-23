@@ -265,6 +265,25 @@ def test_fetch_text_rejects_and_does_not_cache_no_index_body(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_fetch_text_rejects_and_removes_cached_no_index_body(tmp_path):
+    url = build_search_url()
+    http = FakeHttp({})
+    source = BlurayComSource(http=http, cache_dir=tmp_path, delay_seconds=0)
+    cache_path = source._cache_path(url)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("<html><body>No index.</body></html>", encoding="utf-8")
+
+    try:
+        source.fetch_text(url)
+    except ValueError as exc:
+        assert "No index" in str(exc)
+    else:
+        raise AssertionError("expected cached No index body to be rejected")
+
+    assert not cache_path.exists()
+    assert http.calls == []
+
+
 class FakeHttp:
     def __init__(self, responses):
         self.responses = responses
