@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+from pathlib import Path
+import sys
 from typing import Sequence
 
+from find_fel_nzbdav.bluray_com import BlurayComSource
+from find_fel_nzbdav.catalog import render_catalog_payload
 from find_fel_nzbdav.config import Config
 from find_fel_nzbdav.http import HttpClient, redact_url
 from find_fel_nzbdav.hydra import search_hydra
@@ -111,6 +115,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_catalog_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="find-fel-nzbdav catalog",
+        description="Build a Dolby Vision 4K catalog from supported sources.",
+    )
+    parser.add_argument("--source", choices=["bluray-com"], default="bluray-com")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    parser.add_argument("--pages", type=int, default=1)
+    parser.add_argument("--country", default="all")
+    parser.add_argument("--cache-dir", default=".cache/bluray-com")
+    parser.add_argument("--delay-seconds", type=float, default=10.0)
+    parser.add_argument("--include-releases", action="store_true")
+    parser.add_argument("--output", default=None)
+    return parser
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -118,8 +138,13 @@ def main(
     nzbdav=None,
     webdav=None,
     probe=None,
+    catalog_source=None,
 ) -> int:
-    args = build_parser().parse_args(argv)
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if effective_argv and effective_argv[0] == "catalog":
+        return main_catalog(effective_argv[1:], catalog_source=catalog_source)
+
+    args = build_parser().parse_args(effective_argv)
     config = Config.from_env_file(args.env)
     if args.max_candidates is not None:
         config = _replace_config(config, max_candidates=args.max_candidates)
@@ -156,6 +181,32 @@ def main(
     else:
         print(render_text(result))
     return exit_code_for_result(result)
+
+
+def main_catalog(argv: Sequence[str] | None = None, *, catalog_source=None) -> int:
+    args = build_catalog_parser().parse_args(argv)
+    if catalog_source is None:
+        catalog_source = BlurayComSource(
+            HttpClient(headers={}),
+            cache_dir=args.cache_dir,
+            country=args.country,
+            delay_seconds=args.delay_seconds,
+        )
+
+    releases = catalog_source.discover_releases(pages=args.pages)
+    payload = render_catalog_payload(
+        releases,
+        include_releases=args.include_releases,
+        source=args.source,
+    )
+    output = json.dumps(payload, indent=2, sort_keys=True)
+    if args.output:
+        output_path = Path(args.output)
+        output_path.write_text(output, encoding="utf-8")
+        print(f"Wrote {output_path}")
+    else:
+        print(output)
+    return 0
 
 
 def render_json(result: TitleResult) -> str:

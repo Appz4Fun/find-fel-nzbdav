@@ -4,7 +4,100 @@ import json
 from pathlib import Path
 
 from find_fel_nzbdav.cli import main, render_json
+from find_fel_nzbdav.catalog import CatalogRelease
 from find_fel_nzbdav.models import Candidate, CandidateResult, TitleResult
+
+
+class FakeCatalogSource:
+    def __init__(self, releases):
+        self.releases = releases
+        self.pages = []
+
+    def discover_releases(self, pages=1):
+        self.pages.append(pages)
+        return self.releases
+
+
+def _catalog_release(title: str, normalized_title: str, year: int) -> CatalogRelease:
+    return CatalogRelease(
+        source="bluray-com",
+        source_id=normalized_title.replace(" ", "-"),
+        source_url=f"https://www.blu-ray.com/movies/{normalized_title.replace(' ', '-')}/1/",
+        title=title,
+        normalized_title=normalized_title,
+        year=year,
+        country="United States",
+        release_date=None,
+        edition=None,
+        studio=None,
+        video="2160p",
+        hdr="Dolby Vision",
+        discs="4K Ultra HD",
+        is_4k=True,
+        is_dolby_vision=True,
+    )
+
+
+def test_catalog_json_uses_injected_source_without_env(capsys):
+    fake_source = FakeCatalogSource(
+        [
+            _catalog_release("28 Days Later", "28 days later", 2002),
+            _catalog_release("The Deer Hunter", "deer hunter", 1978),
+        ]
+    )
+
+    exit_code = main(
+        ["catalog", "--source", "bluray-com", "--json", "--pages", "1"],
+        catalog_source=fake_source,
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert fake_source.pages == [1]
+    assert output["source"] == "bluray-com"
+    assert output["count"] == 2
+    assert [row["title"] for row in output["titles"]] == [
+        "28 Days Later",
+        "The Deer Hunter",
+    ]
+
+
+def test_catalog_output_writes_json_file_and_prints_path(tmp_path: Path, capsys):
+    output_path = tmp_path / "catalog.json"
+    fake_source = FakeCatalogSource(
+        [_catalog_release("The Deer Hunter", "deer hunter", 1978)]
+    )
+
+    exit_code = main(
+        ["catalog", "--source", "bluray-com", "--output", str(output_path)],
+        catalog_source=fake_source,
+    )
+
+    message = capsys.readouterr().out
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["source"] == "bluray-com"
+    assert payload["count"] == 1
+    assert payload["titles"][0]["title"] == "The Deer Hunter"
+    assert str(output_path) in message
+
+
+def test_catalog_json_zero_pages_returns_empty_payload(capsys):
+    fake_source = FakeCatalogSource([])
+
+    exit_code = main(
+        ["catalog", "--source", "bluray-com", "--json", "--pages", "0"],
+        catalog_source=fake_source,
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert fake_source.pages == [0]
+    assert output == {
+        "source": "bluray-com",
+        "count": 0,
+        "titles": [],
+    }
 
 
 def test_render_json_outputs_verdict_reason_and_candidates():
