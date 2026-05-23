@@ -130,3 +130,33 @@ def test_render_catalog_payload_includes_titles_and_optional_releases():
             }
         ],
     }
+
+
+def test_render_catalog_payload_uses_explicit_source_for_empty_catalog():
+    assert render_catalog_payload([], source="bluray-com") == {
+        "source": "bluray-com",
+        "count": 0,
+        "titles": [],
+    }
+
+
+def test_deduped_title_strips_format_suffix_when_all_releases_have_it():
+    release = CatalogRelease(
+        source="bluray-com",
+        source_id="deer-hunter-us",
+        source_url="https://www.blu-ray.com/movies/The-Deer-Hunter-4K-Blu-ray/1/",
+        title="The Deer Hunter 4K Blu-ray",
+        normalized_title="deer hunter",
+        year=1978,
+        country="United States",
+        release_date=None,
+        edition=None,
+        studio=None,
+        video="2160p",
+        hdr="Dolby Vision",
+        discs="4K Ultra HD",
+        is_4k=True,
+        is_dolby_vision=True,
+    )
+
+    assert dedupe_catalog_titles([release])[0].title == "The Deer Hunter"

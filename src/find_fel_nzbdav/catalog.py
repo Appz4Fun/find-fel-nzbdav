@@ -81,12 +81,15 @@ def dedupe_catalog_titles(releases: list[CatalogRelease]) -> list[CatalogTitle]:
 
 
 def render_catalog_payload(
-    releases: list[CatalogRelease], include_releases: bool = False
+    releases: list[CatalogRelease],
+    include_releases: bool = False,
+    *,
+    source: str | None = None,
 ) -> dict[str, object]:
     titles = dedupe_catalog_titles(releases)
     sources = {release.source for release in releases}
     payload: dict[str, object] = {
-        "source": releases[0].source if len(sources) == 1 else "mixed",
+        "source": source or (releases[0].source if len(sources) == 1 else "mixed"),
         "count": len(titles),
         "titles": [asdict(title) for title in titles],
     }
@@ -102,4 +105,12 @@ def _choose_display_title(releases: list[CatalogRelease]) -> str:
         if normalize_catalog_title(release.title) == release.normalized_title
     ]
     candidates = non_format_titles or [release.title for release in releases]
-    return min(candidates, key=lambda title: (len(title), title.lower()))
+    return _strip_display_format_suffix(min(candidates, key=lambda title: (len(title), title.lower())))
+
+
+def _strip_display_format_suffix(title: str) -> str:
+    while True:
+        stripped = _FORMAT_SUFFIX_RE.sub("", title).strip(" :-,")
+        if stripped == title:
+            return title
+        title = stripped
