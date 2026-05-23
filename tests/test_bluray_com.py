@@ -131,6 +131,30 @@ def test_parse_release_detail_prefers_h1_flag_and_title_metadata_over_og_edition
     assert release.release_date == "Sep 01, 2026"
 
 
+def test_parse_release_detail_metadata_handles_nested_runtime_span_before_release_date():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/28-Days-Later-4K-Blu-ray/410867/",
+        """
+        <a href="https://www.blu-ray.com/28-Days-Later/18452/"><h1>28 Days Later 4K Blu-ray</h1></a>
+        <img src="https://images.static-bluray.com/flags/US.png" title="United States" alt="United States">
+        <span class="subheading grey">
+          <a class="grey" href="/movies/movies.php?studioid=7">Sony Pictures</a> |
+          <a class="grey" href="/movies/movies.php?year=2002">2002</a> |
+          <span id="runtime" title="1 hr 53 min">113 min</span> |
+          Rated R |
+          <a class="grey noline" title="28 Days Later 4K Blu-ray Release Date September 1, 2026">Sep 01, 2026</a> (3 Months)
+        </span>
+        <span class="subheading">Video</span><br>
+        Resolution: 4K (2160p)<br>
+        HDR: Dolby Vision, HDR10<br>
+        <span class="subheading">Discs</span><br>
+        4K Ultra HD<br>
+        """,
+    )
+
+    assert release.release_date == "Sep 01, 2026"
+
+
 def test_parse_release_detail_classifies_hdr10_only_as_not_dolby_vision():
     release = parse_release_detail(
         "https://www.blu-ray.com/movies/Movie-4K-Blu-ray/1/",

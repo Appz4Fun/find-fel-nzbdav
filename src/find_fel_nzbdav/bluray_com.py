@@ -80,7 +80,11 @@ def parse_release_detail(url: str, html: str) -> CatalogRelease:
     hdr = _extract_hdr(video)
     metadata = _extract_title_metadata(html)
     year = _extract_year(_section_text(sections, "year") or metadata or title_text)
-    release_date = _section_text(sections, "release date") or _extract_release_date(metadata)
+    release_date = (
+        _section_text(sections, "release date")
+        or _extract_release_date_from_anchor(html)
+        or _extract_release_date(metadata)
+    )
     edition = _section_text(sections, "edition") or _extract_edition(html)
     studio = _section_text(sections, "studio") or _extract_studio(metadata)
     structured_4k_text = "\n".join(part for part in (video, discs) if part)
@@ -297,6 +301,17 @@ def _extract_release_date(metadata: str | None) -> str | None:
         return None
     parts = [part.strip() for part in metadata.split("|") if part.strip()]
     return parts[-1] if parts else None
+
+
+def _extract_release_date_from_anchor(html: str) -> str | None:
+    match = re.search(
+        r"""<a\b(?=[^>]*\btitle\s*=\s*(["'])[^"']*Release Date [^"']*\1)[^>]*>(.*?)</a>""",
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    return _normalize_space(_TAG_RE.sub(" ", unescape(match.group(2)))) or None
 
 
 def _extract_country(title: str) -> str | None:
