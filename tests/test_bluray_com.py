@@ -1,0 +1,410 @@
+from catalog import normalize_catalog_title
+from bluray_com import (
+    BlurayComSource,
+    build_search_url,
+    parse_release_detail,
+    parse_search_results,
+)
+
+
+def test_build_search_url_for_page_two_uses_expected_query():
+    assert (
+        build_search_url(page=2)
+        == "https://www.blu-ray.com/movies/search.php?action=search&ultrahd=1&dolbyvision=1&sortby=releasetimestamp&page=2"
+    )
+
+
+def test_parse_search_results_returns_unique_constrained_detail_urls():
+    html = """
+    <a href="/movies/Blade-Runner-2049-4K-Blu-ray/189774/">movie</a>
+    <a href="https://www.blu-ray.com/movies/Blade-Runner-2049-4K-Blu-ray/189774/">dupe</a>
+    <a href="/movies/Arrival-Blu-ray/12345/">not 4k</a>
+    <a href="/news/?id=999">news</a>
+    <a href="https://example.com/movies/Fake-4K-Blu-ray/111/">external</a>
+    <a href="//example.com/movies/Protocol-Relative-4K-Blu-ray/222/">external</a>
+    <a href="/movies/Dune-4K-Blu-ray/292794/">second</a>
+    """
+
+    assert parse_search_results(html) == [
+        "https://www.blu-ray.com/movies/Blade-Runner-2049-4K-Blu-ray/189774/",
+        "https://www.blu-ray.com/movies/Dune-4K-Blu-ray/292794/",
+    ]
+
+
+def test_parse_release_detail_extracts_catalog_release_fields():
+    url = "https://www.blu-ray.com/movies/Dune-Part-Two-4K-Blu-ray/355725/"
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Dune: Part Two 4K Blu-ray (United States)" />
+      </head>
+      <body>
+        <h2>Video</h2>
+        Codec: HEVC / H.265<br>
+        Resolution: 2160p<br>
+        HDR: HDR10 / Dolby Vision<br>
+        <h2>Discs</h2>
+        4K Ultra HD Blu-ray Disc<br>
+        Two-disc set<br>
+        <h2>Studio</h2>
+        Warner Bros.<br>
+        <h2>Release Date</h2>
+        May 14, 2024<br>
+        <h2>Edition</h2>
+        SteelBook<br>
+        <h2>Year</h2>
+        2024<br>
+        <p>This review prose should not matter.</p>
+      </body>
+    </html>
+    """
+
+    release = parse_release_detail(url, html)
+
+    assert release.source == "bluray-com"
+    assert release.source_id == "355725"
+    assert release.source_url == url
+    assert release.title == "Dune: Part Two"
+    assert release.normalized_title == normalize_catalog_title("Dune: Part Two")
+    assert release.year == 2024
+    assert release.country == "United States"
+    assert release.release_date == "May 14, 2024"
+    assert release.edition == "SteelBook"
+    assert release.studio == "Warner Bros."
+    assert release.video == "Codec: HEVC / H.265\nResolution: 2160p\nHDR: HDR10 / Dolby Vision"
+    assert release.hdr == "HDR10 / Dolby Vision"
+    assert release.discs == "4K Ultra HD Blu-ray Disc\nTwo-disc set"
+    assert release.is_4k is True
+    assert release.is_dolby_vision is True
+    assert release.fel_status == "unknown"
+
+
+def test_parse_release_detail_supports_bluray_com_subheading_spans():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/28-Days-Later-4K-Blu-ray/410867/",
+        """
+        <meta property="og:title" content="28 Days Later 4K Blu-ray (United States)" />
+        <span class="subheading">Video</span><br>
+        Codec: HEVC / H.265<br>
+        Resolution: 4K (2160p)<br>
+        HDR: Dolby Vision, HDR10<br>
+        <span class="subheading">Discs</span><br>
+        4K Ultra HD<br>
+        Blu-ray Disc<br>
+        """,
+    )
+
+    assert release.video == (
+        "Codec: HEVC / H.265\nResolution: 4K (2160p)\nHDR: Dolby Vision, HDR10"
+    )
+    assert release.discs == "4K Ultra HD\nBlu-ray Disc"
+    assert release.is_4k is True
+    assert release.is_dolby_vision is True
+
+
+def test_parse_release_detail_keeps_bold_field_labels_inside_video_section():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/Bold-Labels-4K-Blu-ray/410868/",
+        """
+        <meta property="og:title" content="Bold Labels 4K Blu-ray (United States)" />
+        <span class="subheading">Video</span><br>
+        <b>Codec:</b> HEVC / H.265<br>
+        <b>Resolution:</b> 2160p<br>
+        <b>HDR:</b> Dolby Vision, HDR10<br>
+        <span class="subheading">Discs</span><br>
+        <strong>Disc:</strong> 4K Ultra HD<br>
+        """,
+    )
+
+    assert release.video == "Codec: HEVC / H.265\nResolution: 2160p\nHDR: Dolby Vision, HDR10"
+    assert release.discs == "Disc: 4K Ultra HD"
+    assert release.hdr == "Dolby Vision, HDR10"
+    assert release.is_4k is True
+    assert release.is_dolby_vision is True
+
+
+def test_parse_release_detail_prefers_h1_flag_and_title_metadata_over_og_edition():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/28-Days-Later-4K-Blu-ray/410867/",
+        """
+        <meta property="og:title" content="28 Days Later 4K Blu-ray (SteelBook)" />
+        <a href="https://www.blu-ray.com/28-Days-Later/18452/"><h1>28 Days Later 4K Blu-ray</h1></a>
+        <img src="https://images.static-bluray.com/flags/US.png" title="United States" alt="United States">
+        <span class="subheadingtitle">SteelBook / Limited Edition / 4K Ultra HD + Digital 4K</span>
+        <span class="subheading grey">
+          <a class="grey" href="/movies/movies.php?studioid=7">Sony Pictures</a> |
+          <a class="grey" href="/movies/movies.php?year=2002">2002</a> |
+          113 min | Rated R |
+          <a class="grey noline" title="28 Days Later 4K Blu-ray Release Date September 1, 2026">Sep 01, 2026</a>
+        </span>
+        <span class="subheading">Video</span><br>
+        Resolution: 4K (2160p)<br>
+        HDR: Dolby Vision, HDR10<br>
+        <span class="subheading">Discs</span><br>
+        4K Ultra HD<br>
+        """,
+    )
+
+    assert release.title == "28 Days Later"
+    assert release.country == "United States"
+    assert release.edition == "SteelBook / Limited Edition / 4K Ultra HD + Digital 4K"
+    assert release.studio == "Sony Pictures"
+    assert release.year == 2002
+    assert release.release_date == "Sep 01, 2026"
+
+
+def test_parse_release_detail_does_not_treat_edition_suffix_as_country():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/Movie-4K-Blu-ray/410869/",
+        """
+        <meta property="og:title" content="Movie 4K Blu-ray (SteelBook)" />
+        <span class="subheading">Video</span><br>
+        Resolution: 2160p<br>
+        HDR: Dolby Vision<br>
+        <span class="subheading">Discs</span><br>
+        4K Ultra HD<br>
+        """,
+    )
+
+    assert release.title == "Movie"
+    assert release.country is None
+
+
+def test_parse_release_detail_metadata_handles_nested_runtime_span_before_release_date():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/28-Days-Later-4K-Blu-ray/410867/",
+        """
+        <a href="https://www.blu-ray.com/28-Days-Later/18452/"><h1>28 Days Later 4K Blu-ray</h1></a>
+        <img src="https://images.static-bluray.com/flags/US.png" title="United States" alt="United States">
+        <span class="subheading grey">
+          <a class="grey" href="/movies/movies.php?studioid=7">Sony Pictures</a> |
+          <a class="grey" href="/movies/movies.php?year=2002">2002</a> |
+          <span id="runtime" title="1 hr 53 min">113 min</span> |
+          Rated R |
+          <a class="grey noline" title="28 Days Later 4K Blu-ray Release Date September 1, 2026">Sep 01, 2026</a> (3 Months)
+        </span>
+        <span class="subheading">Video</span><br>
+        Resolution: 4K (2160p)<br>
+        HDR: Dolby Vision, HDR10<br>
+        <span class="subheading">Discs</span><br>
+        4K Ultra HD<br>
+        """,
+    )
+
+    assert release.release_date == "Sep 01, 2026"
+
+
+def test_parse_release_detail_classifies_hdr10_only_as_not_dolby_vision():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/Movie-4K-Blu-ray/1/",
+        """
+        <title>Movie 4K Blu-ray</title>
+        <h2>Video</h2>
+        Resolution: 2160p<br>
+        HDR: HDR10<br>
+        <h2>Discs</h2>
+        4K Ultra HD Blu-ray<br>
+        <p>The review mentions Dolby Vision in unrelated prose.</p>
+        """,
+    )
+
+    assert release.hdr == "HDR10"
+    assert release.is_dolby_vision is False
+
+
+def test_parse_release_detail_classifies_non_4k_structured_data_as_not_4k():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/Movie-4K-Blu-ray/2/",
+        """
+        <title>Movie 4K Blu-ray</title>
+        <h2>Video</h2>
+        Resolution: 1080p<br>
+        HDR: Dolby Vision<br>
+        <h2>Disc</h2>
+        Blu-ray Disc<br>
+        """,
+    )
+
+    assert release.is_4k is False
+    assert release.is_dolby_vision is True
+
+
+def test_review_prose_does_not_override_structured_hdr10():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/Another-Movie-4K-Blu-ray/3/",
+        """
+        <meta property="og:title" content="Another Movie 4K Blu-ray" />
+        <h2>Video</h2>
+        Resolution: 2160p<br>
+        HDR: HDR10<br>
+        <p>Fans hoping for Dolby Vision will be disappointed.</p>
+        """,
+    )
+
+    assert release.is_4k is True
+    assert release.is_dolby_vision is False
+
+
+def test_discover_releases_fetches_pages_and_filters_to_4k_dolby_vision():
+    search_url = build_search_url(page=1)
+    good_url = "https://www.blu-ray.com/movies/Good-Movie-4K-Blu-ray/10/"
+    hdr10_url = "https://www.blu-ray.com/movies/HDR10-Movie-4K-Blu-ray/11/"
+    non4k_url = "https://www.blu-ray.com/movies/HD-Movie-4K-Blu-ray/12/"
+    responses = {
+        search_url: f"""
+            <a href="{good_url}">Good</a>
+            <a href="{hdr10_url}">HDR10</a>
+            <a href="{non4k_url}">HD</a>
+        """,
+        good_url: """
+            <meta property="og:title" content="Good Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+        hdr10_url: """
+            <meta property="og:title" content="HDR10 Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: HDR10<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+        non4k_url: """
+            <meta property="og:title" content="HD Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 1080p<br>HDR: Dolby Vision<br>
+            <h2>Disc</h2>Blu-ray Disc<br>
+        """,
+    }
+    http = FakeHttp(responses)
+
+    releases = BlurayComSource(http=http, delay_seconds=0).discover_releases(pages=1)
+
+    assert [release.source_id for release in releases] == ["10"]
+    assert http.calls == [search_url, good_url, hdr10_url, non4k_url]
+
+
+def test_discover_releases_filters_obvious_tv_season_releases():
+    search_url = build_search_url(page=1)
+    movie_url = "https://www.blu-ray.com/movies/Good-Movie-4K-Blu-ray/20/"
+    season_url = "https://www.blu-ray.com/movies/Fallout-Season-Two-4K-Blu-ray/21/"
+    series_url = "https://www.blu-ray.com/movies/The-Show-The-Complete-Series-4K-Blu-ray/22/"
+    responses = {
+        search_url: f"""
+            <a href="{movie_url}">Good Movie</a>
+            <a href="{season_url}">Fallout: Season Two</a>
+            <a href="{series_url}">The Show: The Complete Series</a>
+        """,
+        movie_url: """
+            <meta property="og:title" content="Good Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+        season_url: """
+            <meta property="og:title" content="Fallout: Season Two 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+        series_url: """
+            <meta property="og:title" content="The Show: The Complete Series 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+    }
+    http = FakeHttp(responses)
+
+    releases = BlurayComSource(http=http, delay_seconds=0).discover_releases(pages=1)
+
+    assert [release.title for release in releases] == ["Good Movie"]
+    assert http.calls == [search_url, movie_url, season_url, series_url]
+
+
+def test_discover_releases_deduplicates_detail_urls_across_pages():
+    page_one = build_search_url(page=1)
+    page_two = build_search_url(page=2)
+    detail_url = "https://www.blu-ray.com/movies/Dupe-Movie-4K-Blu-ray/30/"
+    responses = {
+        page_one: f'<a href="{detail_url}">Dupe</a>',
+        page_two: f'<a href="{detail_url}">Dupe again</a>',
+        detail_url: """
+            <meta property="og:title" content="Dupe Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+    }
+    http = FakeHttp(responses)
+
+    releases = BlurayComSource(http=http, delay_seconds=0).discover_releases(pages=2)
+
+    assert [release.source_id for release in releases] == ["30"]
+    assert http.calls == [page_one, detail_url, page_two]
+
+
+def test_discover_releases_supports_zero_pages():
+    http = FakeHttp({})
+
+    assert BlurayComSource(http=http, delay_seconds=0).discover_releases(pages=0) == []
+    assert http.calls == []
+
+
+def test_cache_reuses_text_response_for_same_url(tmp_path):
+    url = "https://www.blu-ray.com/movies/Cached-Movie-4K-Blu-ray/20/"
+    http = FakeHttp(
+        {
+            url: """
+            <meta property="og:title" content="Cached Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+            """
+        }
+    )
+    source = BlurayComSource(http=http, cache_dir=tmp_path, delay_seconds=0)
+
+    assert source.fetch_text(url) == source.fetch_text(url)
+    assert http.calls == [url]
+
+
+def test_source_sets_browser_user_agent_and_country_cookie():
+    http = FakeHttp({})
+
+    BlurayComSource(http=http, country="all", delay_seconds=0)
+
+    assert http.headers["User-Agent"].startswith("Mozilla/5.0")
+    assert http.headers["Cookie"] == "country=all"
+
+
+def test_fetch_text_rejects_and_does_not_cache_no_index_body(tmp_path):
+    url = build_search_url()
+    http = FakeHttp({url: '<html><body>No index.</body></html>'})
+    source = BlurayComSource(http=http, cache_dir=tmp_path, delay_seconds=0)
+
+    try:
+        source.fetch_text(url)
+    except ValueError as exc:
+        assert "No index" in str(exc)
+    else:
+        raise AssertionError("expected No index body to be rejected")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_fetch_text_removes_cached_no_index_body_and_refetches(tmp_path):
+    url = build_search_url()
+    fresh_body = "<html><body>Fresh search results</body></html>"
+    http = FakeHttp({url: fresh_body})
+    source = BlurayComSource(http=http, cache_dir=tmp_path, delay_seconds=0)
+    cache_path = source._cache_path(url)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("<html><body>No index.</body></html>", encoding="utf-8")
+
+    assert source.fetch_text(url) == fresh_body
+
+    assert cache_path.read_text(encoding="utf-8") == fresh_body
+    assert http.calls == [url]
+
+
+class FakeHttp:
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+        self.headers = {}
+
+    def get_text(self, url, timeout=30):
+        self.calls.append(url)
+        return self.responses[url]

@@ -40,24 +40,24 @@ while True:
                 else:
                     print(f"No more slugs found on page {p}. Stopping.", flush=True)
                     break
-            
+
             consecutive_errors = 0
             for s in slugs:
                 title = s.replace("-4K-Blu-ray", "").replace("-", " ")
                 titles.add(title)
             print(f"Page {p} scraped. Total unique titles: {len(titles)}", flush=True)
-            
+
             # Check for growth
             if len(titles) == last_titles_count:
                 no_growth_pages += 1
             else:
                 no_growth_pages = 0
                 last_titles_count = len(titles)
-            
+
             if no_growth_pages >= 3:
                 print("Titles count has not increased for 3 pages. Done scraping.", flush=True)
                 break
-                
+
             p += 1
             time.sleep(0.3)
     except Exception as e:

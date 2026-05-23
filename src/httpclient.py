@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -26,8 +27,12 @@ class HttpClient:
     def get_text(self, url: str, timeout: float = 30) -> str:
         request = Request(url, headers=self.headers)
         with self.opener(request, timeout=timeout) as response:
-            charset = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(charset)
+            body = response.read()
+            charset = response.headers.get_content_charset() or _html_meta_charset(body) or "utf-8"
+            try:
+                return body.decode(charset, errors="replace")
+            except LookupError:
+                return body.decode("utf-8", errors="replace")
 
     def get_bytes(self, url: str, timeout: float = 30) -> bytes:
         request = Request(url, headers=self.headers)
@@ -103,3 +108,13 @@ def _multipart_body(boundary: str, field_name: str, filename: str, data: bytes) 
     ).encode("utf-8")
     footer = f"\r\n--{boundary}--\r\n".encode("utf-8")
     return header + data + footer
+
+
+def _html_meta_charset(body: bytes) -> str | None:
+    head = body[:4096].decode("ascii", errors="ignore")
+    match = re.search(
+        r"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9._-]+)""",
+        head,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
