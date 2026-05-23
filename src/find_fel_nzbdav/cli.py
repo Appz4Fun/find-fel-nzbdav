@@ -187,7 +187,7 @@ def main_catalog(argv: Sequence[str] | None = None, *, catalog_source=None) -> i
     args = build_catalog_parser().parse_args(argv)
     if catalog_source is None:
         catalog_source = BlurayComSource(
-            HttpClient(headers={}),
+            HttpClient(headers={"User-Agent": "find-fel-nzbdav/0.1"}),
             cache_dir=args.cache_dir,
             country=args.country,
             delay_seconds=args.delay_seconds,

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from find_fel_nzbdav.cli import main, render_json
 from find_fel_nzbdav.catalog import CatalogRelease
+import find_fel_nzbdav.cli as cli_module
 from find_fel_nzbdav.models import Candidate, CandidateResult, TitleResult
 
 
@@ -97,6 +98,36 @@ def test_catalog_json_zero_pages_returns_empty_payload(capsys):
         "source": "bluray-com",
         "count": 0,
         "titles": [],
+    }
+
+
+def test_catalog_default_source_starts_http_with_project_user_agent(monkeypatch, capsys):
+    captured = {}
+
+    class FakeSource:
+        def __init__(self, http, cache_dir, country, delay_seconds):
+            captured["headers"] = dict(http.headers)
+            captured["cache_dir"] = cache_dir
+            captured["country"] = country
+            captured["delay_seconds"] = delay_seconds
+
+        def discover_releases(self, pages=1):
+            captured["pages"] = pages
+            return []
+
+    monkeypatch.setattr(cli_module, "BlurayComSource", FakeSource)
+
+    exit_code = main(["catalog", "--json", "--pages", "0"])
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert output["count"] == 0
+    assert captured == {
+        "headers": {"User-Agent": "find-fel-nzbdav/0.1"},
+        "cache_dir": ".cache/bluray-com",
+        "country": "all",
+        "delay_seconds": 10.0,
+        "pages": 0,
     }
 
 
