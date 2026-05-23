@@ -1,5 +1,5 @@
-import find_fel_nzbdav.models as models
-from find_fel_nzbdav.models import Candidate, TitleResult
+import models
+from models import Candidate, TitleResult
 
 
 def test_task_one_models_do_not_export_probe_result_yet():

@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 
-from find_fel_nzbdav.models import VERDICT_FEL, VERDICT_NOT_FEL, VERDICT_UNKNOWN
+from models import VERDICT_FEL, VERDICT_NOT_FEL, VERDICT_UNKNOWN
 
 
 PROFILE_7_RE = re.compile(r"\bprofile\s*[:=]?\s*7\b|\bdvh[ei]\.07\b", re.IGNORECASE)
@@ -16,11 +16,13 @@ NON_PROFILE_7_RE = re.compile(
     re.IGNORECASE,
 )
 FEL_RE = re.compile(
-    r"\bel\s*type\s*[:=]\s*fel\b|\bfull\s+enhancement\s+layer\b",
+    r"\bel\s*type\s*[:=]\s*fel\b|\bfull\s+enhancement\s+layer\b|"
+    r"\bprofile\s*[:=]?\s*7\s*\(\s*fel\s*\)",
     re.IGNORECASE,
 )
 MEL_RE = re.compile(
-    r"\bel\s*type\s*[:=]\s*mel\b|\bminimal\s+enhancement\s+layer\b",
+    r"\bel\s*type\s*[:=]\s*mel\b|\bminimal\s+enhancement\s+layer\b|"
+    r"\bprofile\s*[:=]?\s*7\s*\(\s*mel\s*\)",
     re.IGNORECASE,
 )
 EL_BITRATE_RE = re.compile(
@@ -104,6 +106,39 @@ class MediaProbe:
         self.sample_seconds = sample_seconds
 
     def probe(self, stream_url: str, headers: dict[str, str] | None = None) -> ProbeResult:
+        fast_result = self._fast_probe(stream_url, headers)
+        if fast_result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
+            return fast_result
+        slow_result = self._slow_probe(stream_url, headers)
+        return ProbeResult(
+            slow_result.verdict,
+            slow_result.reason,
+            f"{fast_result.summary}\n\n{slow_result.summary}".strip(),
+        )
+
+    def _fast_probe(
+        self,
+        stream_url: str,
+        headers: dict[str, str] | None = None,
+    ) -> ProbeResult:
+        with tempfile.TemporaryDirectory(prefix="find-fel-fast-probe-") as temp_dir:
+            sample_path = Path(temp_dir) / "sample.hevc"
+            rpu_path = Path(temp_dir) / "sample.rpu"
+            commands = [
+                self._ffmpeg_fast_sample_command(stream_url, sample_path, headers),
+                ["dovi_tool", "extract-rpu", "-i", str(sample_path), "-o", str(rpu_path)],
+                ["dovi_tool", "info", "--summary", "-i", str(rpu_path)],
+            ]
+            results = [self._run(command) for command in commands]
+
+        summary = "\n\n".join(result.summary() for result in results)
+        return classify_probe_text(summary)
+
+    def _slow_probe(
+        self,
+        stream_url: str,
+        headers: dict[str, str] | None = None,
+    ) -> ProbeResult:
         with tempfile.TemporaryDirectory(prefix="find-fel-probe-") as temp_dir:
             sample_path = Path(temp_dir) / "sample.hevc"
             enhancement_path = Path(temp_dir) / "enhancement.hevc"
@@ -167,6 +202,39 @@ class MediaProbe:
                 stream_url,
                 "-map",
                 "0:v:0",
+                "-c",
+                "copy",
+                str(sample_path),
+            ]
+        )
+        return command
+
+    def _ffmpeg_fast_sample_command(
+        self,
+        stream_url: str,
+        sample_path: Path,
+        headers: dict[str, str] | None,
+    ) -> list[str]:
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-analyzeduration",
+            "0",
+            "-probesize",
+            "4096",
+        ]
+        if headers:
+            command.extend(["-headers", _format_ffmpeg_headers(headers)])
+        command.extend(
+            [
+                "-i",
+                stream_url,
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
                 "-c",
                 "copy",
                 str(sample_path),

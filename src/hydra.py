@@ -5,7 +5,7 @@ from typing import Protocol
 from urllib.parse import urlencode
 from xml.etree import ElementTree
 
-from find_fel_nzbdav.models import Candidate
+from models import Candidate
 
 
 class TextHttpClient(Protocol):

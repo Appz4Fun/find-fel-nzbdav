@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from find_fel_nzbdav.models import Candidate
-from find_fel_nzbdav.probe import ProbeResult
-from find_fel_nzbdav.workflow import check_title
+from models import Candidate
+from probe import ProbeResult
+from workflow import check_title
 
 
 def test_no_dv_candidates_auto_disqualifies_title():

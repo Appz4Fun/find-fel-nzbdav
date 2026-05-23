@@ -1,4 +1,4 @@
-from find_fel_nzbdav.http import redact_url
+from httpclient import redact_url
 
 
 def test_redact_url_hides_common_secret_parameters():
@@ -19,7 +19,7 @@ def test_redact_url_hides_nested_secret_parameters_inside_values():
 
 
 def test_http_client_posts_multipart_json():
-    from find_fel_nzbdav.http import HttpClient
+    from httpclient import HttpClient
 
     calls = []
 

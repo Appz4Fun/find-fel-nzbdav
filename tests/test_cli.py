@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 
-from find_fel_nzbdav.cli import main, render_json
-from find_fel_nzbdav.models import Candidate, CandidateResult, TitleResult
+from cli import (
+    default_log_path,
+    format_log_line,
+    main,
+    parse_titles_file,
+    render_json,
+)
+from models import Candidate, CandidateResult, TitleResult
+
+
+ENV_TEXT = (
+    "NZB_DAV_URL=http://server:3000\n"
+    "NZB_DAV_API_KEY=nzbdav-secret\n"
+    "HYDRA_URL=http://server:5076\n"
+    "HYDRA_API_KEY=hydra-secret\n"
+)
 
 
 def test_render_json_outputs_verdict_reason_and_candidates():
@@ -95,3 +110,248 @@ def test_main_returns_two_for_unknown_result(tmp_path: Path, capsys):
     output = capsys.readouterr().out
     assert exit_code == 2
     assert "unknown" in output
+
+
+def test_parse_titles_file_strips_blank_lines_and_comments_and_preserves_order(
+    tmp_path: Path,
+):
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text(
+        "# leading comment\n"
+        "Creepshow\n"
+        "\n"
+        "  The Deer Hunter  \n"
+        "# Despicable Me 4\n"
+        "Despicable Me 4\n"
+        "Creepshow\n",
+        encoding="utf-8",
+    )
+
+    assert parse_titles_file(titles_path) == [
+        "Creepshow",
+        "The Deer Hunter",
+        "Despicable Me 4",
+        "Creepshow",
+    ]
+
+
+def test_main_rejects_when_both_title_and_titles_file_provided(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Creepshow\n", encoding="utf-8")
+
+    exit_code = main(
+        ["--env", str(env_path), "--titles-file", str(titles_path), "Creepshow"],
+        hydra=object(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert exit_code == 2
+    assert "exactly one" in capsys.readouterr().err
+
+
+def test_main_rejects_when_neither_title_nor_titles_file_provided(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+
+    exit_code = main(
+        ["--env", str(env_path)],
+        hydra=object(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert exit_code == 2
+    assert "exactly one" in capsys.readouterr().err
+
+
+def test_main_titles_file_emits_one_json_line_per_title(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Creepshow\nThe Deer Hunter\n", encoding="utf-8")
+
+    class FakeHydra:
+        def search(self, title):
+            return []
+
+    exit_code = main(
+        ["--env", str(env_path), "--json", "--titles-file", str(titles_path)],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    stdout = capsys.readouterr().out
+    lines = [line for line in stdout.splitlines() if line]
+    payloads = [json.loads(line) for line in lines]
+
+    assert exit_code == 0
+    assert [payload["title"] for payload in payloads] == ["Creepshow", "The Deer Hunter"]
+    assert all(payload["verdict"] == "not_fel" for payload in payloads)
+    assert all(payload["reason"] == "no_dv_4k_candidates" for payload in payloads)
+
+
+def test_main_titles_file_continues_after_per_title_exception(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Boom\nCreepshow\n", encoding="utf-8")
+
+    class FakeHydra:
+        def search(self, title):
+            if title == "Boom":
+                raise RuntimeError("hydra outage")
+            return []
+
+    exit_code = main(
+        ["--env", str(env_path), "--json", "--titles-file", str(titles_path)],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    payloads = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line
+    ]
+
+    assert exit_code == 0
+    assert [payload["title"] for payload in payloads] == ["Boom", "Creepshow"]
+    assert payloads[0]["verdict"] == "unknown"
+    assert payloads[0]["reason"] == "error_RuntimeError"
+    assert payloads[1]["verdict"] == "not_fel"
+
+
+def test_main_titles_file_returns_two_when_every_title_is_indeterminate(
+    tmp_path: Path, capsys
+):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Boom\n", encoding="utf-8")
+
+    class FakeHydra:
+        def search(self, title):
+            raise RuntimeError("hydra outage")
+
+    exit_code = main(
+        ["--env", str(env_path), "--json", "--titles-file", str(titles_path)],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert exit_code == 2
+    payloads = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
+    assert payloads[0]["verdict"] == "unknown"
+
+
+def test_default_log_path_combines_logs_dir_with_timestamp():
+    now = datetime.datetime(2026, 5, 22, 23, 45, 12)
+
+    assert default_log_path(now) == Path("logs") / "find-fel-20260522-234512.log"
+
+
+def test_format_log_line_includes_iso_timestamp_title_verdict_and_reason():
+    result = TitleResult.not_fel("Creepshow", "no_dv_4k_candidates")
+    now = datetime.datetime(2026, 5, 22, 23, 45, 12)
+
+    assert (
+        format_log_line(result, now)
+        == "[2026-05-22T23:45:12] Creepshow: not_fel (no_dv_4k_candidates)"
+    )
+
+
+def test_main_writes_one_log_line_per_title_to_explicit_log_file(tmp_path: Path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Creepshow\nDespicable Me 4\n", encoding="utf-8")
+    log_path = tmp_path / "out.log"
+
+    class FakeHydra:
+        def search(self, title):
+            return []
+
+    main(
+        [
+            "--env", str(env_path),
+            "--titles-file", str(titles_path),
+            "--log-file", str(log_path),
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+
+    assert len(lines) == 2
+    assert lines[0].endswith("Creepshow: not_fel (no_dv_4k_candidates)")
+    assert lines[1].endswith("Despicable Me 4: not_fel (no_dv_4k_candidates)")
+
+
+def test_main_creates_log_parent_directory_when_missing(tmp_path: Path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    log_path = tmp_path / "nested" / "deep" / "out.log"
+
+    class FakeHydra:
+        def search(self, title):
+            return []
+
+    main(
+        [
+            "--env", str(env_path),
+            "--log-file", str(log_path),
+            "Creepshow",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert log_path.exists()
+    assert "Creepshow" in log_path.read_text(encoding="utf-8")
+
+
+def test_main_logs_error_verdicts_for_per_title_exceptions(tmp_path: Path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Boom\nOk\n", encoding="utf-8")
+    log_path = tmp_path / "out.log"
+
+    class FakeHydra:
+        def search(self, title):
+            if title == "Boom":
+                raise RuntimeError("hydra outage")
+            return []
+
+    main(
+        [
+            "--env", str(env_path),
+            "--titles-file", str(titles_path),
+            "--log-file", str(log_path),
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+
+    assert lines[0].endswith("Boom: unknown (error_RuntimeError)")
+    assert lines[1].endswith("Ok: not_fel (no_dv_4k_candidates)")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from find_fel_nzbdav.nzbdav import (
+from nzbdav import (
     NZBDavClient,
     storage_to_webdav_path,
     wait_for_terminal_job,

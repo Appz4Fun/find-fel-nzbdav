@@ -1,0 +1,5 @@
+#!/bin/sh
+# Launcher that bypasses the editable-install .pth (which uv hides via macOS
+# UF_HIDDEN, and Python 3.14 silently skips hidden .pth files for security).
+# Runs cli.py directly so src/ ends up on sys.path via Python's script-mode rule.
+exec uv run python "$(dirname "$0")/src/cli.py" "$@"

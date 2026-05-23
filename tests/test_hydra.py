@@ -1,6 +1,6 @@
 from urllib.parse import parse_qs, urlsplit
 
-from find_fel_nzbdav.hydra import (
+from hydra import (
     filter_and_rank_candidates,
     is_dv_4k_mkv_candidate,
     parse_hydra_results,

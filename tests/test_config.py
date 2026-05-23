@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from find_fel_nzbdav.config import Config
+from config import Config
 
 
 def test_console_script_target_is_importable():
-    from find_fel_nzbdav.cli import main
+    from cli import main
 
     assert callable(main)
 
