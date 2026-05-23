@@ -101,6 +101,36 @@ def test_parse_release_detail_supports_bluray_com_subheading_spans():
     assert release.is_dolby_vision is True
 
 
+def test_parse_release_detail_prefers_h1_flag_and_title_metadata_over_og_edition():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/28-Days-Later-4K-Blu-ray/410867/",
+        """
+        <meta property="og:title" content="28 Days Later 4K Blu-ray (SteelBook)" />
+        <a href="https://www.blu-ray.com/28-Days-Later/18452/"><h1>28 Days Later 4K Blu-ray</h1></a>
+        <img src="https://images.static-bluray.com/flags/US.png" title="United States" alt="United States">
+        <span class="subheadingtitle">SteelBook / Limited Edition / 4K Ultra HD + Digital 4K</span>
+        <span class="subheading grey">
+          <a class="grey" href="/movies/movies.php?studioid=7">Sony Pictures</a> |
+          <a class="grey" href="/movies/movies.php?year=2002">2002</a> |
+          113 min | Rated R |
+          <a class="grey noline" title="28 Days Later 4K Blu-ray Release Date September 1, 2026">Sep 01, 2026</a>
+        </span>
+        <span class="subheading">Video</span><br>
+        Resolution: 4K (2160p)<br>
+        HDR: Dolby Vision, HDR10<br>
+        <span class="subheading">Discs</span><br>
+        4K Ultra HD<br>
+        """,
+    )
+
+    assert release.title == "28 Days Later"
+    assert release.country == "United States"
+    assert release.edition == "SteelBook / Limited Edition / 4K Ultra HD + Digital 4K"
+    assert release.studio == "Sony Pictures"
+    assert release.year == 2002
+    assert release.release_date == "Sep 01, 2026"
+
+
 def test_parse_release_detail_classifies_hdr10_only_as_not_dolby_vision():
     release = parse_release_detail(
         "https://www.blu-ray.com/movies/Movie-4K-Blu-ray/1/",
@@ -209,6 +239,30 @@ def test_cache_reuses_text_response_for_same_url(tmp_path):
 
     assert source.fetch_text(url) == source.fetch_text(url)
     assert http.calls == [url]
+
+
+def test_source_sets_browser_user_agent_and_country_cookie():
+    http = FakeHttp({})
+
+    BlurayComSource(http=http, country="all", delay_seconds=0)
+
+    assert http.headers["User-Agent"].startswith("Mozilla/5.0")
+    assert http.headers["Cookie"] == "country=all"
+
+
+def test_fetch_text_rejects_and_does_not_cache_no_index_body(tmp_path):
+    url = build_search_url()
+    http = FakeHttp({url: '<html><body>No index.</body></html>'})
+    source = BlurayComSource(http=http, cache_dir=tmp_path, delay_seconds=0)
+
+    try:
+        source.fetch_text(url)
+    except ValueError as exc:
+        assert "No index" in str(exc)
+    else:
+        raise AssertionError("expected No index body to be rejected")
+
+    assert list(tmp_path.iterdir()) == []
 
 
 class FakeHttp:

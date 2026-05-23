@@ -14,6 +14,11 @@ from find_fel_nzbdav.catalog import CatalogRelease, normalize_catalog_title
 
 BLURAY_COM_BASE = "https://www.blu-ray.com"
 SOURCE_NAME = "bluray-com"
+BLURAY_COM_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0 Safari/537.36"
+)
 
 _DETAIL_PATH_RE = re.compile(r"^/movies/[^\"'<>]*-4K-Blu-ray/(\d+)/?$")
 _HREF_RE = re.compile(r"""\bhref\s*=\s*(["'])(.*?)\1""", re.IGNORECASE | re.DOTALL)
@@ -67,16 +72,17 @@ def parse_search_results(html: str, base_url: str = BLURAY_COM_BASE) -> list[str
 
 def parse_release_detail(url: str, html: str) -> CatalogRelease:
     title_text = _extract_display_title(html)
-    country = _extract_country(title_text)
-    title = _clean_release_title(title_text)
+    country = _extract_detail_country(html) or _extract_country(title_text)
+    title = _clean_release_title(_extract_h1_title(html) or title_text)
     sections = _SectionParser.parse(html)
     video = _section_text(sections, "video")
     discs = _section_text(sections, "discs") or _section_text(sections, "disc")
     hdr = _extract_hdr(video)
-    year = _extract_year(_section_text(sections, "year") or title_text)
-    release_date = _section_text(sections, "release date")
-    edition = _section_text(sections, "edition")
-    studio = _section_text(sections, "studio")
+    metadata = _extract_title_metadata(html)
+    year = _extract_year(_section_text(sections, "year") or metadata or title_text)
+    release_date = _section_text(sections, "release date") or _extract_release_date(metadata)
+    edition = _section_text(sections, "edition") or _extract_edition(html)
+    studio = _section_text(sections, "studio") or _extract_studio(metadata)
     structured_4k_text = "\n".join(part for part in (video, discs) if part)
 
     return CatalogRelease(
@@ -137,6 +143,7 @@ class BlurayComSource:
             return cache_path.read_text(encoding="utf-8")
 
         text = self.http.get_text(url, timeout=self.timeout)
+        _validate_response_text(url, text)
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(text, encoding="utf-8")
@@ -154,8 +161,8 @@ class BlurayComSource:
         headers = getattr(self.http, "headers", None)
         if not isinstance(headers, dict):
             return
-        headers.setdefault("User-Agent", "find-fel-nzbdav/bluray-com")
-        headers.setdefault("Cookie", f"country={self.country}")
+        headers["User-Agent"] = BLURAY_COM_USER_AGENT
+        headers["Cookie"] = f"country={self.country}"
 
 
 class _SectionParser(HTMLParser):
@@ -228,6 +235,64 @@ def _extract_display_title(html: str) -> str:
     return ""
 
 
+def _extract_h1_title(html: str) -> str | None:
+    match = re.search(r"<h1\b[^>]*>(.*?)</h1>", html, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None
+    return _normalize_space(_TAG_RE.sub(" ", unescape(match.group(1))))
+
+
+def _extract_detail_country(html: str) -> str | None:
+    h1_match = re.search(r"</h1>.*?<img\b([^>]*)>", html, re.IGNORECASE | re.DOTALL)
+    if not h1_match:
+        return None
+    attrs = h1_match.group(1)
+    for attr in ("title", "alt"):
+        match = re.search(rf"""\b{attr}\s*=\s*(["'])(.*?)\1""", attrs, re.IGNORECASE | re.DOTALL)
+        if match:
+            value = _normalize_space(unescape(match.group(2)))
+            if value:
+                return value
+    return None
+
+
+def _extract_edition(html: str) -> str | None:
+    match = re.search(
+        r"""<span\b[^>]*\bclass\s*=\s*(["'])[^"']*\bsubheadingtitle\b[^"']*\1[^>]*>(.*?)</span>""",
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    return _normalize_space(_TAG_RE.sub(" ", unescape(match.group(2)))) or None
+
+
+def _extract_title_metadata(html: str) -> str | None:
+    match = re.search(
+        r"""<span\b[^>]*\bclass\s*=\s*(["'])[^"']*\bsubheading\b[^"']*\bgrey\b[^"']*\1[^>]*>(.*?)</span>""",
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    text = re.sub(r"<br\s*/?>", "\n", match.group(2), flags=re.IGNORECASE)
+    return _normalize_space(_TAG_RE.sub(" ", unescape(text))) or None
+
+
+def _extract_studio(metadata: str | None) -> str | None:
+    if not metadata:
+        return None
+    parts = [part.strip() for part in metadata.split("|")]
+    return parts[0] if parts and parts[0] else None
+
+
+def _extract_release_date(metadata: str | None) -> str | None:
+    if not metadata:
+        return None
+    parts = [part.strip() for part in metadata.split("|") if part.strip()]
+    return parts[-1] if parts else None
+
+
 def _extract_country(title: str) -> str | None:
     match = _COUNTRY_SUFFIX_RE.search(title)
     return match.group(1).strip() if match else None
@@ -270,6 +335,11 @@ def _extract_year(text: str) -> int | None:
 
 def _normalize_space(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _validate_response_text(url: str, text: str) -> None:
+    if re.search(r">\s*No index\.\s*<", text, re.IGNORECASE):
+        raise ValueError(f"Blu-ray.com returned No index for {url}")
 
 
 def _is_subheading_span(tag: str, attrs) -> bool:

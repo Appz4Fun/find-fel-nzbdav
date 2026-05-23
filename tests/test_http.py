@@ -62,6 +62,31 @@ def test_http_client_posts_multipart_json():
     assert timeout == 12
 
 
+def test_http_client_get_text_replaces_invalid_declared_charset_bytes():
+    from find_fel_nzbdav.http import HttpClient
+
+    class FakeHeaders:
+        def get_content_charset(self):
+            return "utf-8"
+
+    class FakeResponse:
+        headers = FakeHeaders()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b"caf\xe9"
+
+    def opener(request, timeout=30):
+        return FakeResponse()
+
+    assert HttpClient(opener=opener).get_text("http://example.test") == "caf\ufffd"
+
+
 def test_redact_url_hides_userinfo_password():
     redacted = redact_url("http://user:secret@server/path?apikey=abc")
 

@@ -27,7 +27,7 @@ class HttpClient:
         request = Request(url, headers=self.headers)
         with self.opener(request, timeout=timeout) as response:
             charset = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(charset)
+            return response.read().decode(charset, errors="replace")
 
     def get_bytes(self, url: str, timeout: float = 30) -> bytes:
         request = Request(url, headers=self.headers)
