@@ -34,7 +34,7 @@ class Config:
 
         nzbdav_url = normalize_url(values["NZB_DAV_URL"])
         hydra_url = normalize_url(values["HYDRA_URL"])
-        webdav_url = normalize_url(values.get("WEBDAV_URL") or f"{nzbdav_url}/dav")
+        webdav_url = normalize_url(values.get("WEBDAV_URL") or nzbdav_url)
 
         return cls(
             nzbdav_url=nzbdav_url,

@@ -82,7 +82,9 @@ def find_largest_mkv(
 
 def join_webdav_url(webdav_url: str, href_or_path: str) -> str:
     base = webdav_url.rstrip("/")
-    path = quote(href_or_path.strip("/"), safe="/%")
+    href = urlsplit(href_or_path)
+    raw_path = href.path if href.scheme and href.netloc else href_or_path
+    path = quote(raw_path.strip("/"), safe="/%")
     if not path:
         return f"{base}/"
 

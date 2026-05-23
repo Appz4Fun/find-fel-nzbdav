@@ -154,6 +154,13 @@ def test_join_webdav_url_handles_dav_href_without_doubling_dav():
 
 
 def test_join_webdav_url_handles_content_path_from_storage_conversion():
-    assert join_webdav_url("http://server:3000/dav", "/content/job/movie.mkv") == (
-        "http://server:3000/dav/content/job/movie.mkv"
+    assert join_webdav_url("http://server:3000", "/content/job/movie.mkv") == (
+        "http://server:3000/content/job/movie.mkv"
     )
+
+
+def test_join_webdav_url_handles_absolute_internal_href():
+    assert join_webdav_url(
+        "http://server:3000",
+        "http://localhost:8080/content/job/movie.mkv",
+    ) == "http://server:3000/content/job/movie.mkv"

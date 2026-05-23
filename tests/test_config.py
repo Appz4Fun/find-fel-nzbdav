@@ -22,6 +22,6 @@ def test_loads_required_env_and_defaults_webdav_url(tmp_path: Path):
     config = Config.from_env_file(env_path)
 
     assert config.nzbdav_url == "http://server:3000"
-    assert config.webdav_url == "http://server:3000/dav"
+    assert config.webdav_url == "http://server:3000"
     assert config.hydra_url == "http://server:5076"
     assert config.max_candidates == 3

@@ -41,6 +41,30 @@ def test_classifies_profile_7_without_el_type_as_unknown():
     assert result.reason == "profile_7_el_type_unknown"
 
 
+def test_classifies_profile_7_high_el_bitrate_as_fel():
+    text = (
+        "Dolby Vision Profile 7 el_present_flag: 1\n"
+        "enhancement_layer_bitrate_mbps: 2.414"
+    )
+
+    result = classify_probe_text(text)
+
+    assert result.verdict == "fel"
+    assert result.reason == "profile_7_high_el_bitrate"
+
+
+def test_classifies_profile_7_low_el_bitrate_as_not_fel():
+    text = (
+        "Dolby Vision Profile 7 el_present_flag: 1\n"
+        "enhancement_layer_bitrate_mbps: 0.250"
+    )
+
+    result = classify_probe_text(text)
+
+    assert result.verdict == "not_fel"
+    assert result.reason == "profile_7_low_el_bitrate"
+
+
 def test_does_not_confirm_fel_from_negated_fel_text():
     text = "Dolby Vision Profile 7, this is not FEL"
 
@@ -65,11 +89,13 @@ def test_media_probe_passes_headers_and_captures_command_output():
         )
         if command[0] == "ffmpeg":
             Path(command[-1]).write_bytes(b"hevc")
+        if command[:2] == ["dovi_tool", "demux"]:
+            Path(command[-1]).write_bytes(b"x" * 2_000_000)
         if command[:2] == ["dovi_tool", "extract-rpu"]:
             Path(command[-1]).write_bytes(b"rpu")
         stdout = (
-            "Dolby Vision Profile 7 EL type: FEL"
-            if command[:2] == ["dovi_tool", "info"]
+            "Dolby Vision Profile 7"
+            if command[0] == "ffprobe"
             else ""
         )
         return type("Completed", (), {"returncode": 0, "stdout": stdout, "stderr": "tool stderr"})()
@@ -79,7 +105,7 @@ def test_media_probe_passes_headers_and_captures_command_output():
     result = probe.probe("http://example.test/movie.mkv", {"Authorization": "Basic abc"})
 
     assert result.verdict == "fel"
-    assert result.reason == "profile_7_fel"
+    assert result.reason == "profile_7_high_el_bitrate"
     assert calls[0]["command"][0] == "ffprobe"
     assert "-headers" in calls[0]["command"]
     assert calls[0]["command"][calls[0]["command"].index("-headers") + 1] == (
@@ -89,5 +115,8 @@ def test_media_probe_passes_headers_and_captures_command_output():
     assert "-headers" in calls[2]["command"]
     assert all(call["timeout"] == 12 for call in calls)
     assert "ffprobe" in result.summary
+    assert ["dovi_tool", "demux"] == calls[3]["command"][:2]
     assert "tool stderr" in result.summary
-    assert "Dolby Vision Profile 7 EL type: FEL" in result.summary
+    assert "enhancement_layer_bitrate_mbps" in result.summary
+    assert result.verdict == "fel"
+    assert result.reason == "profile_7_high_el_bitrate"
