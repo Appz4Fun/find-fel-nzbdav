@@ -163,8 +163,8 @@ class BlurayComSource:
                 _validate_response_text(url, cached_text)
             except ValueError:
                 cache_path.unlink(missing_ok=True)
-                raise
-            return cached_text
+            else:
+                return cached_text
 
         text = self.http.get_text(url, timeout=self.timeout)
         _validate_response_text(url, text)
