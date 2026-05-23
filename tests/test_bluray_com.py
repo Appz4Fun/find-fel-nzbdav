@@ -21,6 +21,7 @@ def test_parse_search_results_returns_unique_constrained_detail_urls():
     <a href="/movies/Arrival-Blu-ray/12345/">not 4k</a>
     <a href="/news/?id=999">news</a>
     <a href="https://example.com/movies/Fake-4K-Blu-ray/111/">external</a>
+    <a href="//example.com/movies/Protocol-Relative-4K-Blu-ray/222/">external</a>
     <a href="/movies/Dune-4K-Blu-ray/292794/">second</a>
     """
 
@@ -150,6 +151,23 @@ def test_parse_release_detail_prefers_h1_flag_and_title_metadata_over_og_edition
     assert release.studio == "Sony Pictures"
     assert release.year == 2002
     assert release.release_date == "Sep 01, 2026"
+
+
+def test_parse_release_detail_does_not_treat_edition_suffix_as_country():
+    release = parse_release_detail(
+        "https://www.blu-ray.com/movies/Movie-4K-Blu-ray/410869/",
+        """
+        <meta property="og:title" content="Movie 4K Blu-ray (SteelBook)" />
+        <span class="subheading">Video</span><br>
+        Resolution: 2160p<br>
+        HDR: Dolby Vision<br>
+        <span class="subheading">Discs</span><br>
+        4K Ultra HD<br>
+        """,
+    )
+
+    assert release.title == "Movie"
+    assert release.country is None
 
 
 def test_parse_release_detail_metadata_handles_nested_runtime_span_before_release_date():
@@ -295,6 +313,27 @@ def test_discover_releases_filters_obvious_tv_season_releases():
 
     assert [release.title for release in releases] == ["Good Movie"]
     assert http.calls == [search_url, movie_url, season_url, series_url]
+
+
+def test_discover_releases_deduplicates_detail_urls_across_pages():
+    page_one = build_search_url(page=1)
+    page_two = build_search_url(page=2)
+    detail_url = "https://www.blu-ray.com/movies/Dupe-Movie-4K-Blu-ray/30/"
+    responses = {
+        page_one: f'<a href="{detail_url}">Dupe</a>',
+        page_two: f'<a href="{detail_url}">Dupe again</a>',
+        detail_url: """
+            <meta property="og:title" content="Dupe Movie 4K Blu-ray" />
+            <h2>Video</h2>Resolution: 2160p<br>HDR: Dolby Vision<br>
+            <h2>Discs</h2>4K Ultra HD Blu-ray<br>
+        """,
+    }
+    http = FakeHttp(responses)
+
+    releases = BlurayComSource(http=http, delay_seconds=0).discover_releases(pages=2)
+
+    assert [release.source_id for release in releases] == ["30"]
+    assert http.calls == [page_one, detail_url, page_two]
 
 
 def test_discover_releases_supports_zero_pages():

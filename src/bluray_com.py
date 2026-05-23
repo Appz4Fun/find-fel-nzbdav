@@ -43,6 +43,46 @@ _OBVIOUS_TV_RELEASE_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_KNOWN_COUNTRIES = frozenset(
+    {
+        "Argentina",
+        "Australia",
+        "Austria",
+        "Belgium",
+        "Brazil",
+        "Canada",
+        "Chile",
+        "China",
+        "Czech Republic",
+        "Denmark",
+        "Finland",
+        "France",
+        "Germany",
+        "Greece",
+        "Hong Kong",
+        "Hungary",
+        "India",
+        "Ireland",
+        "Italy",
+        "Japan",
+        "Mexico",
+        "Netherlands",
+        "New Zealand",
+        "Norway",
+        "Poland",
+        "Portugal",
+        "Russia",
+        "South Korea",
+        "Spain",
+        "Sweden",
+        "Switzerland",
+        "Taiwan",
+        "Thailand",
+        "Turkey",
+        "United Kingdom",
+        "United States",
+    }
+)
 
 
 class TextHttpClient(Protocol):
@@ -65,10 +105,11 @@ def build_search_url(page: int = 1, sortby: str = "releasetimestamp") -> str:
 def parse_search_results(html: str, base_url: str = BLURAY_COM_BASE) -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
+    base_netloc = urlsplit(base_url).netloc.lower()
     for match in _HREF_RE.finditer(unescape(html)):
         href = match.group(2).strip()
         parts = urlsplit(href)
-        if parts.scheme and parts.netloc.lower() != urlsplit(base_url).netloc.lower():
+        if parts.netloc and parts.netloc.lower() != base_netloc:
             continue
         path = parts.path
         if not _DETAIL_PATH_RE.match(path):
@@ -142,9 +183,13 @@ class BlurayComSource:
             return []
 
         releases: list[CatalogRelease] = []
+        seen_detail_urls: set[str] = set()
         for page in range(1, pages + 1):
             search_html = self.fetch_text(build_search_url(page=page))
             for detail_url in parse_search_results(search_html):
+                if detail_url in seen_detail_urls:
+                    continue
+                seen_detail_urls.add(detail_url)
                 detail_html = self.fetch_text(detail_url)
                 release = parse_release_detail(detail_url, detail_html)
                 if (
@@ -190,17 +235,19 @@ class BlurayComSource:
 
 
 class _SectionParser(HTMLParser):
-    _HEADINGS = {"h1", "h2", "h3", "h4"}
-    _INLINE_OR_HEADING = {"strong", "b"}
-    _KNOWN_SECTION_HEADINGS = {
-        "video",
-        "disc",
-        "discs",
-        "studio",
-        "release date",
-        "edition",
-        "year",
-    }
+    _HEADINGS = frozenset({"h1", "h2", "h3", "h4"})
+    _INLINE_OR_HEADING = frozenset({"strong", "b"})
+    _KNOWN_SECTION_HEADINGS = frozenset(
+        {
+            "video",
+            "disc",
+            "discs",
+            "studio",
+            "release date",
+            "edition",
+            "year",
+        }
+    )
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -351,7 +398,10 @@ def _extract_release_date_from_anchor(html: str) -> str | None:
 
 def _extract_country(title: str) -> str | None:
     match = _COUNTRY_SUFFIX_RE.search(title)
-    return match.group(1).strip() if match else None
+    if not match:
+        return None
+    country = match.group(1).strip()
+    return country if country in _KNOWN_COUNTRIES else None
 
 
 def _clean_release_title(title: str) -> str:
