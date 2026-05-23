@@ -1,3 +1,5 @@
+from urllib.parse import parse_qs, urlsplit
+
 from find_fel_nzbdav.hydra import (
     filter_and_rank_candidates,
     is_dv_4k_mkv_candidate,
@@ -11,6 +13,7 @@ RSS = """<?xml version="1.0"?>
   <item>
     <title>Creepshow 1982 2160p UHD BluRay REMUX DV HEVC Atmos</title>
     <link>http://hydra/getnzb/one</link>
+    <pubDate>Fri, 22 May 2026 20:15:00 +0000</pubDate>
     <newznab:attr xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/" name="size" value="9000" />
     <newznab:attr xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/" name="indexer" value="idx" />
   </item>
@@ -34,6 +37,7 @@ def test_parse_hydra_results_extracts_title_link_size_and_indexer():
     assert results[0].link == "http://hydra/getnzb/one"
     assert results[0].size_bytes == 9000
     assert results[0].indexer == "idx"
+    assert results[0].pubdate == "Fri, 22 May 2026 20:15:00 +0000"
 
 
 def test_parse_hydra_results_extracts_newznab_attrs_without_namespace_prefix():
@@ -64,9 +68,12 @@ def test_filter_sorts_dv_4k_candidates_by_size_descending():
     assert [candidate.size_bytes for candidate in ranked] == [10001, 9000]
 
 
-def test_filter_uses_standalone_dv_and_rejects_standalone_mp4():
+def test_filter_uses_standalone_dv_and_rejects_conservative_formats():
     assert is_dv_4k_mkv_candidate("Movie 2160p UHD BluRay DV REMUX HEVC")
-    assert not is_dv_4k_mkv_candidate("Movie 2160p UHD BluRay DV MP4 HEVC")
+    for rejected_format in ("MP4", "HDTV", "CAM", "TELESYNC"):
+        assert not is_dv_4k_mkv_candidate(
+            f"Movie 2160p UHD BluRay DV {rejected_format} HEVC"
+        )
     assert not is_dv_4k_mkv_candidate("Movie 2160p UHD BluRay DVD REMUX HEVC")
 
 
@@ -83,5 +90,6 @@ def test_search_hydra_uses_newznab_search_endpoint():
     assert found[0].release_title.startswith("Creepshow")
     assert "t=search" in calls[0]
     assert "q=Creepshow" in calls[0]
+    assert parse_qs(urlsplit(calls[0]).query)["o"] == ["xml"]
     assert "apikey=key" in calls[0]
     assert "limit=100" in calls[0]
