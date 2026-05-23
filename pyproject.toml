@@ -6,14 +6,27 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-find-fel-nzbdav = "find_fel_nzbdav.cli:main"
+find-fel-nzbdav = "cli:main"
 
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+    "bluray_com",
+    "catalog",
+    "cli",
+    "config",
+    "httpclient",
+    "hydra",
+    "models",
+    "nzbdav",
+    "probe",
+    "webdav",
+    "workflow",
+]
 
 [dependency-groups]
 dev = [

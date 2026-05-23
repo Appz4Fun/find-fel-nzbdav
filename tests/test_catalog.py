@@ -1,4 +1,4 @@
-from find_fel_nzbdav.catalog import (
+from catalog import (
     CatalogRelease,
     CatalogTitle,
     dedupe_catalog_titles,

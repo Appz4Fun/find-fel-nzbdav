@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from find_fel_nzbdav.webdav import (
+from webdav import (
     WebDavClient,
     basic_auth_header,
     find_largest_mkv,

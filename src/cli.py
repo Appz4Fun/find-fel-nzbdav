@@ -2,32 +2,33 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import datetime
 import json
 from pathlib import Path
 import sys
 from typing import Sequence
 
-from find_fel_nzbdav.bluray_com import BlurayComSource
-from find_fel_nzbdav.catalog import render_catalog_payload
-from find_fel_nzbdav.config import Config
-from find_fel_nzbdav.http import HttpClient, redact_url
-from find_fel_nzbdav.hydra import search_hydra
-from find_fel_nzbdav.models import (
+from bluray_com import BlurayComSource
+from catalog import render_catalog_payload
+from config import Config
+from httpclient import HttpClient, redact_url
+from hydra import search_hydra
+from models import (
     VERDICT_FEL,
     VERDICT_NOT_FEL,
     Candidate,
     CandidateResult,
     TitleResult,
 )
-from find_fel_nzbdav.nzbdav import NZBDavClient, wait_for_terminal_job, storage_to_webdav_path
-from find_fel_nzbdav.probe import MediaProbe
-from find_fel_nzbdav.webdav import (
+from nzbdav import NZBDavClient, wait_for_terminal_job, storage_to_webdav_path
+from probe import MediaProbe
+from webdav import (
     WebDavClient,
     basic_auth_header,
     find_largest_mkv,
     join_webdav_url,
 )
-from find_fel_nzbdav.workflow import StreamCandidate, check_title
+from workflow import StreamCandidate, check_title
 
 
 class HydraAdapter:
@@ -105,7 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="find-fel-nzbdav",
         description="Check Hydra/NZBDAV Dolby Vision 4K MKV candidates for Profile 7 FEL.",
     )
-    parser.add_argument("title")
+    parser.add_argument("title", nargs="?")
+    parser.add_argument("--titles-file")
+    parser.add_argument("--log-file")
     parser.add_argument("--env", default=".env")
     parser.add_argument("--json", action="store_true", dest="json_output")
     parser.add_argument("--max-candidates", type=int, default=None)
@@ -145,6 +148,12 @@ def main(
         return main_catalog(effective_argv[1:], catalog_source=catalog_source)
 
     args = build_parser().parse_args(effective_argv)
+    if (args.title is None) == (args.titles_file is None):
+        print(
+            "error: provide exactly one of TITLE or --titles-file PATH",
+            file=sys.stderr,
+        )
+        return 2
     config = Config.from_env_file(args.env)
     if args.max_candidates is not None:
         config = _replace_config(config, max_candidates=args.max_candidates)
@@ -152,6 +161,12 @@ def main(
         config = _replace_config(config, timeout=args.timeout)
     if args.poll_interval is not None:
         config = _replace_config(config, poll_interval=args.poll_interval)
+
+    titles = (
+        [args.title]
+        if args.title is not None
+        else parse_titles_file(args.titles_file)
+    )
 
     http = HttpClient(headers={"User-Agent": "find-fel-nzbdav/0.1"})
     hydra = hydra or HydraAdapter(http, config)
@@ -167,20 +182,39 @@ def main(
     )
     probe = probe or MediaProbe(command_timeout=30, sample_seconds=args.probe_seconds)
 
-    result = check_title(
-        args.title,
-        hydra,
-        nzbdav,
-        webdav,
-        probe,
-        max_candidates=config.max_candidates,
-    )
+    log_path = Path(args.log_file) if args.log_file else default_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"logging to {log_path}", file=sys.stderr)
 
-    if args.json_output:
-        print(render_json(result))
-    else:
-        print(render_text(result))
-    return exit_code_for_result(result)
+    has_definitive_verdict = False
+    with log_path.open("a", encoding="utf-8") as log_file:
+        for index, title in enumerate(titles):
+            try:
+                result = check_title(
+                    title,
+                    hydra,
+                    nzbdav,
+                    webdav,
+                    probe,
+                    max_candidates=config.max_candidates,
+                )
+            except Exception as exc:
+                result = TitleResult.unknown(title, f"error_{type(exc).__name__}")
+
+            if args.json_output:
+                print(render_json(result), flush=True)
+            else:
+                if index > 0:
+                    print()
+                print(render_text(result), flush=True)
+
+            log_file.write(format_log_line(result) + "\n")
+            log_file.flush()
+
+            if result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
+                has_definitive_verdict = True
+
+    return 0 if has_definitive_verdict else 2
 
 
 def main_catalog(argv: Sequence[str] | None = None, *, catalog_source=None) -> int:
@@ -210,7 +244,7 @@ def main_catalog(argv: Sequence[str] | None = None, *, catalog_source=None) -> i
 
 
 def render_json(result: TitleResult) -> str:
-    return json.dumps(_title_result_payload(result), indent=2, sort_keys=True)
+    return json.dumps(_title_result_payload(result), sort_keys=True)
 
 
 def render_text(result: TitleResult) -> str:
@@ -223,10 +257,25 @@ def render_text(result: TitleResult) -> str:
     return "\n".join(lines)
 
 
-def exit_code_for_result(result: TitleResult) -> int:
-    if result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
-        return 0
-    return 2
+def parse_titles_file(path: str | Path) -> list[str]:
+    titles: list[str] = []
+    for raw_line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        titles.append(line)
+    return titles
+
+
+def default_log_path(now: datetime.datetime | None = None) -> Path:
+    now = now or datetime.datetime.now()
+    return Path("logs") / f"find-fel-{now.strftime('%Y%m%d-%H%M%S')}.log"
+
+
+def format_log_line(result: TitleResult, now: datetime.datetime | None = None) -> str:
+    now = now or datetime.datetime.now()
+    timestamp = now.isoformat(timespec="seconds")
+    return f"[{timestamp}] {result.title}: {result.verdict} ({result.reason})"
 
 
 def _title_result_payload(result: TitleResult) -> dict:

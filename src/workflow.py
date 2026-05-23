@@ -4,8 +4,8 @@ from dataclasses import dataclass
 import re
 from typing import Protocol
 
-from find_fel_nzbdav.http import redact_url
-from find_fel_nzbdav.models import (
+from httpclient import redact_url
+from models import (
     VERDICT_FEL,
     VERDICT_NOT_FEL,
     Candidate,

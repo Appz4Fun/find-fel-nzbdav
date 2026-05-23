@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlencode, urljoin, urlsplit
 
-from find_fel_nzbdav.catalog import CatalogRelease, normalize_catalog_title
+from catalog import CatalogRelease, normalize_catalog_title
 
 
 BLURAY_COM_BASE = "https://www.blu-ray.com"

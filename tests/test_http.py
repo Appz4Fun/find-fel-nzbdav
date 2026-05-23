@@ -1,4 +1,4 @@
-from find_fel_nzbdav.http import redact_url
+from httpclient import redact_url
 
 
 def test_redact_url_hides_common_secret_parameters():
@@ -19,7 +19,7 @@ def test_redact_url_hides_nested_secret_parameters_inside_values():
 
 
 def test_http_client_posts_multipart_json():
-    from find_fel_nzbdav.http import HttpClient
+    from httpclient import HttpClient
 
     calls = []
 
@@ -63,7 +63,7 @@ def test_http_client_posts_multipart_json():
 
 
 def test_http_client_get_text_replaces_invalid_declared_charset_bytes():
-    from find_fel_nzbdav.http import HttpClient
+    from httpclient import HttpClient
 
     class FakeHeaders:
         def get_content_charset(self):
@@ -88,7 +88,7 @@ def test_http_client_get_text_replaces_invalid_declared_charset_bytes():
 
 
 def test_http_client_get_text_uses_html_meta_charset_when_header_missing():
-    from find_fel_nzbdav.http import HttpClient
+    from httpclient import HttpClient
 
     class FakeHeaders:
         def get_content_charset(self):
@@ -116,7 +116,7 @@ def test_http_client_get_text_uses_html_meta_charset_when_header_missing():
 
 
 def test_http_client_get_text_falls_back_when_html_meta_charset_is_unknown():
-    from find_fel_nzbdav.http import HttpClient
+    from httpclient import HttpClient
 
     class FakeHeaders:
         def get_content_charset(self):

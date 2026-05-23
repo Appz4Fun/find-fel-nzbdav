@@ -1,5 +1,5 @@
-from find_fel_nzbdav.catalog import normalize_catalog_title
-from find_fel_nzbdav.bluray_com import (
+from catalog import normalize_catalog_title
+from bluray_com import (
     BlurayComSource,
     build_search_url,
     parse_release_detail,
