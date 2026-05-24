@@ -28,3 +28,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         conn.execute(statement)
     conn.commit()
+
+
+def insert_title(conn: sqlite3.Connection, title: str) -> None:
+    conn.execute("INSERT OR IGNORE INTO titles(title) VALUES (?)", (title,))
+    conn.commit()

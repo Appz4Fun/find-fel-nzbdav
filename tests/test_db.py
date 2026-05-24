@@ -34,3 +34,36 @@ def test_connect_sets_wal_journal_mode(tmp_path: Path):
         assert mode.lower() == "wal"
     finally:
         conn.close()
+
+
+def test_insert_title_creates_row_with_null_fields(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.db")
+    try:
+        db.insert_title(conn, "Creepshow")
+        row = conn.execute(
+            "SELECT title, date_checked, verdict, reason FROM titles"
+        ).fetchone()
+        assert row == ("Creepshow", None, None, None)
+    finally:
+        conn.close()
+
+
+def test_insert_title_is_idempotent_and_does_not_overwrite(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.db")
+    try:
+        db.insert_title(conn, "Creepshow")
+        conn.execute(
+            "UPDATE titles SET date_checked=?, verdict=?, reason=? WHERE title=?",
+            ("2026-05-23T00:00:00", "fel", "profile_7_fel", "Creepshow"),
+        )
+        conn.commit()
+
+        # Second insert must not clear the existing fields.
+        db.insert_title(conn, "Creepshow")
+        row = conn.execute(
+            "SELECT date_checked, verdict, reason FROM titles WHERE title=?",
+            ("Creepshow",),
+        ).fetchone()
+        assert row == ("2026-05-23T00:00:00", "fel", "profile_7_fel")
+    finally:
+        conn.close()
