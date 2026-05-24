@@ -12,6 +12,7 @@ from typing import Sequence
 from bluray_com import BlurayComSource
 from catalog import render_catalog_payload
 from config import Config
+import db
 from httpclient import HttpClient, redact_url
 from hydra import search_hydra
 from models import (
@@ -119,6 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry-wait", type=float, default=10.0)
     parser.add_argument("--max-consecutive-failures", type=int, default=3)
+    parser.add_argument("--db", default="data/find-fel.db")
+    parser.add_argument("--no-db", action="store_true", dest="no_db")
     return parser
 
 
@@ -190,6 +193,9 @@ def main(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"logging to {log_path}", file=sys.stderr)
 
+    use_db = not args.no_db
+    db_conn = db.connect(Path(args.db)) if use_db else None
+
     has_definitive_verdict = False
     consecutive_failures = 0
     aborted = False
@@ -215,6 +221,14 @@ def main(
 
             log_file.write(format_log_line(result) + "\n")
             log_file.flush()
+            if db_conn is not None:
+                db.upsert_result(
+                    db_conn,
+                    title,
+                    result.verdict,
+                    result.reason or "",
+                    datetime.datetime.now(),
+                )
 
             if result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
                 has_definitive_verdict = True
@@ -232,6 +246,9 @@ def main(
                     break
             else:
                 consecutive_failures = 0
+
+    if db_conn is not None:
+        db_conn.close()
 
     if aborted:
         return 3

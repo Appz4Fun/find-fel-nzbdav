@@ -191,7 +191,7 @@ def test_main_json_returns_zero_for_not_fel_no_dv(tmp_path: Path, capsys):
             return []
 
     exit_code = main(
-        ["--env", str(env_path), "--json", "Creepshow"],
+        ["--env", str(env_path), "--no-db", "--json", "Creepshow"],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -224,7 +224,7 @@ def test_main_returns_two_for_unknown_result(tmp_path: Path, capsys):
             raise RuntimeError("nope")
 
     exit_code = main(
-        ["--env", str(env_path), "Title"],
+        ["--env", str(env_path), "--no-db", "Title"],
         hydra=FakeHydra(),
         nzbdav=FakeNZBDav(),
         webdav=object(),
@@ -266,7 +266,7 @@ def test_main_rejects_when_both_title_and_titles_file_provided(tmp_path: Path, c
     titles_path.write_text("Creepshow\n", encoding="utf-8")
 
     exit_code = main(
-        ["--env", str(env_path), "--titles-file", str(titles_path), "Creepshow"],
+        ["--env", str(env_path), "--no-db", "--titles-file", str(titles_path), "Creepshow"],
         hydra=object(),
         nzbdav=object(),
         webdav=object(),
@@ -304,7 +304,7 @@ def test_main_titles_file_emits_one_json_line_per_title(tmp_path: Path, capsys):
             return []
 
     exit_code = main(
-        ["--env", str(env_path), "--json", "--titles-file", str(titles_path)],
+        ["--env", str(env_path), "--no-db", "--json", "--titles-file", str(titles_path)],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -334,7 +334,7 @@ def test_main_titles_file_continues_after_per_title_exception(tmp_path: Path, ca
             return []
 
     exit_code = main(
-        ["--env", str(env_path), "--json", "--titles-file", str(titles_path)],
+        ["--env", str(env_path), "--no-db", "--json", "--titles-file", str(titles_path)],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -367,7 +367,7 @@ def test_main_titles_file_returns_two_when_every_title_is_indeterminate(
             raise RuntimeError("hydra outage")
 
     exit_code = main(
-        ["--env", str(env_path), "--json", "--titles-file", str(titles_path)],
+        ["--env", str(env_path), "--no-db", "--json", "--titles-file", str(titles_path)],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -408,7 +408,7 @@ def test_main_writes_one_log_line_per_title_to_explicit_log_file(tmp_path: Path)
 
     main(
         [
-            "--env", str(env_path),
+            "--env", str(env_path), "--no-db",
             "--titles-file", str(titles_path),
             "--log-file", str(log_path),
         ],
@@ -436,7 +436,7 @@ def test_main_creates_log_parent_directory_when_missing(tmp_path: Path):
 
     main(
         [
-            "--env", str(env_path),
+            "--env", str(env_path), "--no-db",
             "--log-file", str(log_path),
             "Creepshow",
         ],
@@ -465,7 +465,7 @@ def test_main_logs_error_verdicts_for_per_title_exceptions(tmp_path: Path):
 
     main(
         [
-            "--env", str(env_path),
+            "--env", str(env_path), "--no-db",
             "--titles-file", str(titles_path),
             "--log-file", str(log_path),
         ],
@@ -479,3 +479,113 @@ def test_main_logs_error_verdicts_for_per_title_exceptions(tmp_path: Path):
 
     assert lines[0].endswith("Boom: unknown (error_RuntimeError)")
     assert lines[1].endswith("Ok: not_fel (no_dv_4k_candidates)")
+
+
+import sqlite3
+
+
+def test_main_single_title_upserts_result_to_db(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+    log_path = tmp_path / "run.log"
+
+    class FakeHydra:
+        def search(self, title):
+            return []
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--log-file", str(log_path),
+            "--json",
+            "Creepshow",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert exit_code == 0
+    capsys.readouterr()  # drain
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT title, verdict, reason FROM titles"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("Creepshow", "not_fel", "no_dv_4k_candidates")
+
+
+def test_main_titles_file_upserts_each_title_to_db(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Creepshow\nThe Deer Hunter\n", encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+    log_path = tmp_path / "run.log"
+
+    class FakeHydra:
+        def search(self, title):
+            return []
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--log-file", str(log_path),
+            "--json",
+            "--titles-file", str(titles_path),
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert exit_code == 0
+    capsys.readouterr()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT title, verdict, reason FROM titles ORDER BY title"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [
+        ("Creepshow", "not_fel", "no_dv_4k_candidates"),
+        ("The Deer Hunter", "not_fel", "no_dv_4k_candidates"),
+    ]
+
+
+def test_main_no_db_flag_disables_db_writes(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+    log_path = tmp_path / "run.log"
+
+    class FakeHydra:
+        def search(self, title):
+            return []
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--no-db",
+            "--log-file", str(log_path),
+            "--json",
+            "Creepshow",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    capsys.readouterr()
+    assert exit_code == 0
+    assert not db_path.exists()
