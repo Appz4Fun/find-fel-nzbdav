@@ -191,7 +191,7 @@ def test_main_json_returns_zero_for_not_fel_no_dv(tmp_path: Path, capsys):
             return []
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "--json", "Creepshow"],
+        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--json", "Creepshow"],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -224,7 +224,7 @@ def test_main_returns_two_for_unknown_result(tmp_path: Path, capsys):
             raise RuntimeError("nope")
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "Title"],
+        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "Title"],
         hydra=FakeHydra(),
         nzbdav=FakeNZBDav(),
         webdav=object(),
@@ -266,7 +266,7 @@ def test_main_rejects_when_both_title_and_titles_file_provided(tmp_path: Path, c
     titles_path.write_text("Creepshow\n", encoding="utf-8")
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "--titles-file", str(titles_path), "Creepshow"],
+        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--titles-file", str(titles_path), "Creepshow"],
         hydra=object(),
         nzbdav=object(),
         webdav=object(),
@@ -288,7 +288,7 @@ def test_main_titles_file_emits_one_json_line_per_title(tmp_path: Path, capsys):
             return []
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "--json", "--titles-file", str(titles_path)],
+        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--json", "--titles-file", str(titles_path)],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -318,7 +318,7 @@ def test_main_titles_file_continues_after_per_title_exception(tmp_path: Path, ca
             return []
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "--json", "--titles-file", str(titles_path)],
+        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--json", "--titles-file", str(titles_path)],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -351,7 +351,7 @@ def test_main_titles_file_returns_two_when_every_title_is_indeterminate(
             raise RuntimeError("hydra outage")
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "--json", "--titles-file", str(titles_path)],
+        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--json", "--titles-file", str(titles_path)],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -392,7 +392,7 @@ def test_main_writes_one_log_line_per_title_to_explicit_log_file(tmp_path: Path)
 
     main(
         [
-            "--env", str(env_path), "--no-db",
+            "--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"),
             "--titles-file", str(titles_path),
             "--log-file", str(log_path),
         ],
@@ -420,7 +420,7 @@ def test_main_creates_log_parent_directory_when_missing(tmp_path: Path):
 
     main(
         [
-            "--env", str(env_path), "--no-db",
+            "--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(log_path),
             "Creepshow",
         ],
@@ -449,7 +449,7 @@ def test_main_logs_error_verdicts_for_per_title_exceptions(tmp_path: Path):
 
     main(
         [
-            "--env", str(env_path), "--no-db",
+            "--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"),
             "--titles-file", str(titles_path),
             "--log-file", str(log_path),
         ],
@@ -482,6 +482,7 @@ def test_main_single_title_upserts_result_to_db(tmp_path: Path, capsys):
         [
             "--env", str(env_path),
             "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(log_path),
             "--json",
             "Creepshow",
@@ -520,6 +521,7 @@ def test_main_titles_file_upserts_each_title_to_db(tmp_path: Path, capsys):
         [
             "--env", str(env_path),
             "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(log_path),
             "--json",
             "--titles-file", str(titles_path),
@@ -560,6 +562,7 @@ def test_main_no_db_flag_disables_db_writes(tmp_path: Path, capsys):
             "--env", str(env_path),
             "--db", str(db_path),
             "--no-db",
+            "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(log_path),
             "--json",
             "Creepshow",
@@ -606,6 +609,7 @@ def test_main_default_mode_processes_pending_titles_from_db(tmp_path: Path, caps
         [
             "--env", str(env_path),
             "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(log_path),
             "--json",
         ],
@@ -641,6 +645,7 @@ def test_main_default_mode_exits_two_when_db_missing(tmp_path: Path, capsys):
         [
             "--env", str(env_path),
             "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(tmp_path / "run.log"),
         ],
         hydra=object(),
@@ -677,6 +682,7 @@ def test_main_default_mode_exits_two_when_db_has_no_pending_rows(
         [
             "--env", str(env_path),
             "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(tmp_path / "run.log"),
         ],
         hydra=object(),
@@ -710,6 +716,7 @@ def test_main_default_mode_consecutive_failure_abort(tmp_path: Path, capsys):
         [
             "--env", str(env_path),
             "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
             "--log-file", str(tmp_path / "run.log"),
             "--retries", "0",
             "--max-consecutive-failures", "2",
@@ -722,3 +729,146 @@ def test_main_default_mode_consecutive_failure_abort(tmp_path: Path, capsys):
 
     capsys.readouterr()
     assert exit_code == 3
+
+
+def _write_pool_yaml(path: Path, entries: list[dict]) -> None:
+    import yaml
+    path.write_text(yaml.safe_dump(entries), encoding="utf-8")
+
+
+def test_main_uses_parallel_path_when_pool_yaml_present(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    pool_path = tmp_path / "pool.yaml"
+    _write_pool_yaml(
+        pool_path,
+        [
+            {"url": "http://dav1:3000", "api_key": "A", "webdav_url": "http://dav1:3000"},
+            {"url": "http://dav2:3000", "api_key": "B", "webdav_url": "http://dav2:3000"},
+        ],
+    )
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Creepshow\nThe Deer Hunter\n", encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+    log_path = tmp_path / "run.log"
+
+    parallel_calls: list[tuple] = []
+
+    def fake_parallel(
+        titles,
+        endpoints,
+        *,
+        hydra,
+        probe,
+        max_candidates,
+        poll_interval,
+        nzbdav_timeout,
+        retries,
+        retry_wait,
+        on_result,
+    ):
+        title_list = list(titles)
+        parallel_calls.append((title_list, len(endpoints)))
+        # Drive the callback so DB writes happen.
+        import datetime as dt
+        from models import TitleResult
+        for title in title_list:
+            on_result(title, TitleResult.not_fel(title, "no_dv_4k_candidates"), False)
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--pool", str(pool_path),
+            "--db", str(db_path),
+            "--log-file", str(log_path),
+            "--json",
+            "--titles-file", str(titles_path),
+        ],
+        hydra=object(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+        parallel_run=fake_parallel,
+    )
+
+    capsys.readouterr()
+    assert exit_code == 0
+    assert parallel_calls == [(["Creepshow", "The Deer Hunter"], 2)]
+
+
+def test_main_uses_sequential_path_when_pool_yaml_absent(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+    log_path = tmp_path / "run.log"
+
+    class FakeHydra:
+        def search(self, title):
+            return []
+
+    parallel_called = []
+
+    def fake_parallel(*args, **kwargs):
+        parallel_called.append(True)
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--pool", str(tmp_path / "absent-pool.yaml"),
+            "--db", str(db_path),
+            "--log-file", str(log_path),
+            "--json",
+            "Creepshow",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+        parallel_run=fake_parallel,
+    )
+
+    capsys.readouterr()
+    assert exit_code == 0
+    assert parallel_called == []  # sequential path used
+
+
+def test_main_warns_when_max_consecutive_failures_passed_with_pool(
+    tmp_path: Path, capsys
+):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    pool_path = tmp_path / "pool.yaml"
+    _write_pool_yaml(
+        pool_path,
+        [
+            {"url": "http://dav1:3000", "api_key": "A"},
+            {"url": "http://dav2:3000", "api_key": "B"},
+        ],
+    )
+    titles_path = tmp_path / "titles.txt"
+    titles_path.write_text("Creepshow\n", encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+
+    def fake_parallel(titles, endpoints, *, on_result, **kwargs):
+        from models import TitleResult
+        for title in titles:
+            on_result(title, TitleResult.fel(title, "profile_7_fel"), False)
+
+    main(
+        [
+            "--env", str(env_path),
+            "--pool", str(pool_path),
+            "--db", str(db_path),
+            "--log-file", str(tmp_path / "run.log"),
+            "--max-consecutive-failures", "1",
+            "--titles-file", str(titles_path),
+        ],
+        hydra=object(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+        parallel_run=fake_parallel,
+    )
+
+    err = capsys.readouterr().err
+    assert "no effect with a pool active" in err

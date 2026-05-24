@@ -13,6 +13,7 @@ from bluray_com import BlurayComSource
 from catalog import render_catalog_payload
 from config import Config
 import db
+import parallel
 from httpclient import HttpClient, redact_url
 from hydra import search_hydra
 from models import (
@@ -31,6 +32,9 @@ from webdav import (
     join_webdav_url,
 )
 from workflow import StreamCandidate, check_title, check_title_with_retries
+
+
+_DEFAULT_MAX_CONSECUTIVE_FAILURES = 3
 
 
 class HydraAdapter:
@@ -119,9 +123,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe-seconds", type=int, default=10)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry-wait", type=float, default=10.0)
-    parser.add_argument("--max-consecutive-failures", type=int, default=3)
+    parser.add_argument(
+        "--max-consecutive-failures",
+        type=int,
+        default=_DEFAULT_MAX_CONSECUTIVE_FAILURES,
+    )
     parser.add_argument("--db", default="data/find-fel.db")
     parser.add_argument("--no-db", action="store_true", dest="no_db")
+    parser.add_argument("--pool", default="pool.yaml")
     return parser
 
 
@@ -149,6 +158,7 @@ def main(
     webdav=None,
     probe=None,
     catalog_source=None,
+    parallel_run=None,
 ) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
     if effective_argv and effective_argv[0] == "catalog":
@@ -179,7 +189,8 @@ def main(
                 )
             return 2
 
-    config = Config.from_env_file(args.env)
+    pool_path = Path(args.pool) if args.pool else None
+    config = Config.from_env_file(args.env, pool_path=pool_path)
     if args.max_candidates is not None:
         config = _replace_config(config, max_candidates=args.max_candidates)
     if args.timeout is not None:
@@ -217,6 +228,57 @@ def main(
 
     if default_mode and db_conn is not None:
         titles = list(db.pending_titles(db_conn))
+
+    if len(config.endpoints) > 1:
+        if args.max_consecutive_failures != _DEFAULT_MAX_CONSECUTIVE_FAILURES:
+            print(
+                "warning: --max-consecutive-failures has no effect with a pool active",
+                file=sys.stderr,
+            )
+
+        state = {"has_definitive_verdict": False}
+
+        def _on_result(title: str, result, failed: bool) -> None:
+            if args.json_output:
+                print(render_json(result), flush=True)
+            else:
+                print(render_text(result), flush=True)
+            try:
+                log_file_handle.write(format_log_line(result) + "\n")
+                log_file_handle.flush()
+            except Exception:
+                pass
+            if db_conn is not None:
+                db.upsert_result(
+                    db_conn,
+                    title,
+                    result.verdict,
+                    result.reason or "",
+                    datetime.datetime.now(),
+                )
+            if result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
+                state["has_definitive_verdict"] = True
+
+        runner = parallel_run if parallel_run is not None else parallel.run_parallel
+        with log_path.open("a", encoding="utf-8") as log_file_handle:
+            runner(
+                titles,
+                list(config.endpoints),
+                hydra=hydra,
+                probe=probe,
+                max_candidates=config.max_candidates,
+                poll_interval=config.poll_interval,
+                nzbdav_timeout=config.timeout,
+                retries=args.retries,
+                retry_wait=args.retry_wait,
+                on_result=_on_result,
+            )
+
+        if db_conn is not None:
+            db_conn.close()
+        return 0 if state["has_definitive_verdict"] else 2
+
+    # else: fall through to the existing sequential path below
 
     has_definitive_verdict = False
     consecutive_failures = 0
