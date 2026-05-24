@@ -145,6 +145,41 @@ It processes un-scanned titles first (alphabetical), then retries titles whose l
 
 `data/*.db` is gitignored, so your scan history stays local.
 
+### Parallel mode (NZBDAV pool)
+
+If you have multiple NZBDAV instances, drop a `pool.yaml` in the project root listing each one. Once the file exists, every batch run fans out across the pool with one worker per entry (each NZBDAV can only process one NZB at a time, so the pool size is the natural concurrency).
+
+```bash
+cp pool.yaml.example pool.yaml
+# edit pool.yaml
+./find-fel-nzbdav
+```
+
+`pool.yaml` schema:
+
+```yaml
+- url: http://dav1:3000
+  api_key: AAA
+  webdav_url: http://dav1:3000   # optional, defaults to url
+  webdav_user: null               # optional
+  webdav_pass: null               # optional
+- url: http://dav2:3000
+  api_key: BBB
+```
+
+| Flag | Description | Default |
+|---|---|---|
+| `--pool PATH` | YAML pool file path | `pool.yaml` |
+
+When the pool is active:
+
+- Results print, log, and upsert in **completion order**, not input order.
+- Per-title retries (`--retries`, `--retry-wait`) still apply.
+- `--max-consecutive-failures` is **ignored** (a warning is printed). Sustained outages on one endpoint don't abort the run; that worker just retries titles until things recover.
+- `pool.yaml` is gitignored, so your endpoint URLs and API keys stay local.
+
+If `pool.yaml` is absent the tool runs in single-endpoint mode using `NZB_DAV_URL` / `NZB_DAV_API_KEY` from `.env` (today's behavior).
+
 ### Other flags
 
 | Flag | Description | Default |
@@ -159,6 +194,7 @@ It processes un-scanned titles first (alphabetical), then retries titles whose l
 | `--poll-interval SECONDS` | NZBDAV poll cadence | `5` |
 | `--db PATH` | SQLite database path | `data/find-fel.db` |
 | `--no-db` | Skip DB writes for this run | off |
+| `--pool PATH` | YAML pool file path | `pool.yaml` |
 
 ---
 
