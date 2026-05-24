@@ -30,7 +30,7 @@ from webdav import (
     find_largest_mkv,
     join_webdav_url,
 )
-from workflow import StreamCandidate, check_title
+from workflow import StreamCandidate, check_title, check_title_with_retries
 
 
 class HydraAdapter:
@@ -223,7 +223,7 @@ def main(
     aborted = False
     with log_path.open("a", encoding="utf-8") as log_file:
         for index, title in enumerate(titles):
-            result, failed = _check_with_retries(
+            result, failed = check_title_with_retries(
                 title,
                 hydra,
                 nzbdav,
@@ -232,6 +232,7 @@ def main(
                 max_candidates=config.max_candidates,
                 retries=args.retries,
                 retry_wait=args.retry_wait,
+                logger=lambda msg: print(msg, file=sys.stderr, flush=True),
             )
 
             if args.json_output:
@@ -301,48 +302,6 @@ def main_catalog(argv: Sequence[str] | None = None, *, catalog_source=None) -> i
     else:
         print(output)
     return 0
-
-
-def _check_with_retries(
-    title: str,
-    hydra,
-    nzbdav,
-    webdav,
-    probe,
-    *,
-    max_candidates: int,
-    retries: int,
-    retry_wait: float,
-) -> tuple[TitleResult, bool]:
-    attempts = max(1, retries + 1)
-    last_exc: Exception | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            result = check_title(
-                title,
-                hydra,
-                nzbdav,
-                webdav,
-                probe,
-                max_candidates=max_candidates,
-            )
-            return result, False
-        except Exception as exc:
-            last_exc = exc
-            if attempt < attempts:
-                wait = retry_wait * attempt
-                print(
-                    f"{title}: {type(exc).__name__} on attempt {attempt}/{attempts}, "
-                    f"retrying in {wait:.0f}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                time.sleep(wait)
-    assert last_exc is not None
-    return (
-        TitleResult.unknown(title, f"error_{type(last_exc).__name__}"),
-        True,
-    )
 
 
 def render_json(result: TitleResult) -> str:

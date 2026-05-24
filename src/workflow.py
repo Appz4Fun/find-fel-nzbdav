@@ -149,6 +149,52 @@ def check_title(
     )
 
 
+import time as _time
+
+
+def check_title_with_retries(
+    title: str,
+    hydra,
+    nzbdav,
+    webdav,
+    probe,
+    *,
+    max_candidates: int,
+    retries: int,
+    retry_wait: float,
+    sleep=_time.sleep,
+    logger=None,
+):
+    attempts = max(1, retries + 1)
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            result = check_title(
+                title,
+                hydra,
+                nzbdav,
+                webdav,
+                probe,
+                max_candidates=max_candidates,
+            )
+            return result, False
+        except Exception as exc:
+            last_exc = exc
+            if attempt < attempts:
+                wait = retry_wait * attempt
+                if logger is not None:
+                    logger(
+                        f"{title}: {type(exc).__name__} on attempt {attempt}/{attempts}, "
+                        f"retrying in {wait:.0f}s"
+                    )
+                sleep(wait)
+    assert last_exc is not None
+    return (
+        TitleResult.unknown(title, f"error_{type(last_exc).__name__}"),
+        True,
+    )
+
+
 def dedupe_candidates(candidates: list[Candidate]) -> list[Candidate]:
     seen: set[tuple[str, int]] = set()
     deduped: list[Candidate] = []
