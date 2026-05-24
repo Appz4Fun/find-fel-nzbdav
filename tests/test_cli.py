@@ -274,23 +274,7 @@ def test_main_rejects_when_both_title_and_titles_file_provided(tmp_path: Path, c
     )
 
     assert exit_code == 2
-    assert "exactly one" in capsys.readouterr().err
-
-
-def test_main_rejects_when_neither_title_nor_titles_file_provided(tmp_path: Path, capsys):
-    env_path = tmp_path / ".env"
-    env_path.write_text(ENV_TEXT, encoding="utf-8")
-
-    exit_code = main(
-        ["--env", str(env_path)],
-        hydra=object(),
-        nzbdav=object(),
-        webdav=object(),
-        probe=object(),
-    )
-
-    assert exit_code == 2
-    assert "exactly one" in capsys.readouterr().err
+    assert "at most one" in capsys.readouterr().err
 
 
 def test_main_titles_file_emits_one_json_line_per_title(tmp_path: Path, capsys):
@@ -589,3 +573,152 @@ def test_main_no_db_flag_disables_db_writes(tmp_path: Path, capsys):
     capsys.readouterr()
     assert exit_code == 0
     assert not db_path.exists()
+
+
+def test_main_default_mode_processes_pending_titles_from_db(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+    log_path = tmp_path / "run.log"
+
+    # Seed the DB: two un-scanned, one error_*, one already-done.
+    import db as db_module
+    import datetime as dt
+
+    conn = db_module.connect(db_path)
+    try:
+        db_module.insert_title(conn, "Creepshow")
+        db_module.insert_title(conn, "Akira")
+        when = dt.datetime(2026, 5, 23, 0, 0, 0)
+        db_module.upsert_result(conn, "Done Movie", "fel", "profile_7_fel", when)
+        db_module.upsert_result(conn, "Errored Movie", "unknown", "error_URLError", when)
+    finally:
+        conn.close()
+
+    seen_titles: list[str] = []
+
+    class FakeHydra:
+        def search(self, title):
+            seen_titles.append(title)
+            return []
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--log-file", str(log_path),
+            "--json",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    capsys.readouterr()
+    # Un-scanned alphabetical (Akira, Creepshow) then errors (Errored Movie).
+    assert seen_titles == ["Akira", "Creepshow", "Errored Movie"]
+    assert exit_code == 0
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT verdict, reason FROM titles WHERE title=?",
+            ("Errored Movie",),
+        ).fetchone()
+    finally:
+        conn.close()
+    # The retry overwrote the prior error with the latest scan outcome.
+    assert row == ("not_fel", "no_dv_4k_candidates")
+
+
+def test_main_default_mode_exits_two_when_db_missing(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "does-not-exist.db"
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--log-file", str(tmp_path / "run.log"),
+        ],
+        hydra=object(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "no database" in err
+    assert str(db_path) in err
+
+
+def test_main_default_mode_exits_two_when_db_has_no_pending_rows(
+    tmp_path: Path, capsys
+):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+
+    import db as db_module
+    import datetime as dt
+
+    conn = db_module.connect(db_path)
+    try:
+        db_module.upsert_result(
+            conn, "Done", "fel", "profile_7_fel", dt.datetime(2026, 5, 23)
+        )
+    finally:
+        conn.close()
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--log-file", str(tmp_path / "run.log"),
+        ],
+        hydra=object(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    capsys.readouterr()
+    assert exit_code == 2
+
+
+def test_main_default_mode_consecutive_failure_abort(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+
+    import db as db_module
+    conn = db_module.connect(db_path)
+    try:
+        for title in ["A", "B", "C", "D"]:
+            db_module.insert_title(conn, title)
+    finally:
+        conn.close()
+
+    class FakeHydra:
+        def search(self, title):
+            raise RuntimeError("hydra down")
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--log-file", str(tmp_path / "run.log"),
+            "--retries", "0",
+            "--max-consecutive-failures", "2",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    capsys.readouterr()
+    assert exit_code == 3

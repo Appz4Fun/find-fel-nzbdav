@@ -155,12 +155,30 @@ def main(
         return main_catalog(effective_argv[1:], catalog_source=catalog_source)
 
     args = build_parser().parse_args(effective_argv)
-    if (args.title is None) == (args.titles_file is None):
+    if args.title is not None and args.titles_file is not None:
         print(
-            "error: provide exactly one of TITLE or --titles-file PATH",
+            "error: pass at most one of TITLE or --titles-file PATH",
             file=sys.stderr,
         )
         return 2
+
+    default_mode = args.title is None and args.titles_file is None
+    if default_mode:
+        db_path_obj = Path(args.db)
+        if args.no_db or not db_path_obj.exists():
+            if args.no_db:
+                print(
+                    "error: default mode requires a database; "
+                    "do not combine with --no-db",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"error: no database at {db_path_obj}; nothing to scan",
+                    file=sys.stderr,
+                )
+            return 2
+
     config = Config.from_env_file(args.env)
     if args.max_candidates is not None:
         config = _replace_config(config, max_candidates=args.max_candidates)
@@ -169,11 +187,12 @@ def main(
     if args.poll_interval is not None:
         config = _replace_config(config, poll_interval=args.poll_interval)
 
-    titles = (
-        [args.title]
-        if args.title is not None
-        else parse_titles_file(args.titles_file)
-    )
+    if args.title is not None:
+        titles: list[str] = [args.title]
+    elif args.titles_file is not None:
+        titles = parse_titles_file(args.titles_file)
+    else:
+        titles = []  # filled from db.pending_titles below
 
     http = HttpClient(headers={"User-Agent": "find-fel-nzbdav/0.1"})
     hydra = hydra or HydraAdapter(http, config)
@@ -195,6 +214,9 @@ def main(
 
     use_db = not args.no_db
     db_conn = db.connect(Path(args.db)) if use_db else None
+
+    if default_mode and db_conn is not None:
+        titles = list(db.pending_titles(db_conn))
 
     has_definitive_verdict = False
     consecutive_failures = 0
