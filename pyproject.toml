@@ -3,7 +3,9 @@ name = "find-fel-nzbdav"
 version = "0.1.0"
 description = "Check NZBDAV/Hydra candidates for Dolby Vision Profile 7 FEL."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pyyaml>=6",
+]
 
 [project.scripts]
 find-fel-nzbdav = "cli:main"

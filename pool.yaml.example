@@ -1,0 +1,18 @@
+# Copy this file to pool.yaml and edit it.
+# One entry per NZBDAV server you want to fan out across.
+# Each NZBDAV instance can only process one NZB at a time,
+# so the pool size IS the parallelism.
+#
+# Required per entry: url, api_key
+# Optional per entry: webdav_url (defaults to url),
+#                     webdav_user, webdav_pass
+
+- url: http://dav1:3000
+  api_key: REPLACE_ME_1
+  webdav_url: http://dav1:3000
+
+- url: http://dav2:3000
+  api_key: REPLACE_ME_2
+  webdav_url: http://dav2:3000
+  webdav_user: dav2user
+  webdav_pass: dav2pass

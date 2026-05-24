@@ -1,4 +1,5 @@
 .env
+pool.yaml
 .cache/
 .pytest_cache/
 .ruff_cache/
