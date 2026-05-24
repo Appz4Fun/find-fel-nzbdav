@@ -101,3 +101,40 @@ def test_upsert_result_updates_existing_row(tmp_path: Path):
         assert count == 1
     finally:
         conn.close()
+
+
+def test_pending_titles_yields_unscanned_then_errors_alphabetical(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.db")
+    when = datetime.datetime(2026, 5, 23, 0, 0, 0)
+    try:
+        # Un-scanned titles (NULL date_checked) inserted out of order:
+        db.insert_title(conn, "Banshees of Inisherin")
+        db.insert_title(conn, "Akira")
+        db.insert_title(conn, "Creepshow")
+
+        # Already scanned successfully — must be skipped.
+        db.upsert_result(conn, "Done Movie", "fel", "profile_7_fel", when)
+        db.upsert_result(conn, "Another Done", "not_fel", "no_dv_4k_candidates", when)
+        db.upsert_result(conn, "Third Done", "not_fel", "no_confirmed_fel", when)
+
+        # Errored — must come AFTER all NULLs, alphabetical within group.
+        db.upsert_result(conn, "Zulu", "unknown", "error_URLError", when)
+        db.upsert_result(conn, "Aliens", "unknown", "error_TimeoutError", when)
+
+        assert list(db.pending_titles(conn)) == [
+            "Akira",
+            "Banshees of Inisherin",
+            "Creepshow",
+            "Aliens",
+            "Zulu",
+        ]
+    finally:
+        conn.close()
+
+
+def test_pending_titles_returns_empty_when_db_has_no_rows(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.db")
+    try:
+        assert list(db.pending_titles(conn)) == []
+    finally:
+        conn.close()

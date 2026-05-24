@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -55,3 +56,22 @@ def upsert_result(
         (title, when.isoformat(timespec="seconds"), verdict, reason),
     )
     conn.commit()
+
+
+def pending_titles(conn: sqlite3.Connection) -> Iterator[str]:
+    unscanned = conn.execute(
+        "SELECT title FROM titles WHERE date_checked IS NULL ORDER BY title"
+    )
+    for (title,) in unscanned:
+        yield title
+
+    errored = conn.execute(
+        r"""
+        SELECT title FROM titles
+        WHERE date_checked IS NOT NULL
+          AND reason LIKE 'error\_%' ESCAPE '\'
+        ORDER BY title
+        """
+    )
+    for (title,) in errored:
+        yield title
