@@ -76,29 +76,29 @@ class NZBDavAdapter:
 
 
 class WebDavAdapter:
-    def __init__(self, http: WebDavClient, config: Config) -> None:
+    def __init__(self, http: WebDavClient, endpoint) -> None:
         self.http = http
-        self.config = config
+        self.endpoint = endpoint
 
     def find_mkv(self, storage: str) -> StreamCandidate | None:
         path = storage_to_webdav_path(storage)
         mkv = find_largest_mkv(
             self.http,
-            self.config.webdav_url,
+            self.endpoint.webdav_url,
             path,
-            username=self.config.webdav_user,
-            password=self.config.webdav_pass,
+            username=self.endpoint.webdav_user,
+            password=self.endpoint.webdav_pass,
         )
         if mkv is None:
             return None
         headers = (
-            basic_auth_header(self.config.webdav_user, self.config.webdav_pass)
-            if self.config.webdav_user and self.config.webdav_pass
+            basic_auth_header(self.endpoint.webdav_user, self.endpoint.webdav_pass)
+            if self.endpoint.webdav_user and self.endpoint.webdav_pass
             else {}
         )
         return StreamCandidate(
             path=mkv.path,
-            url=join_webdav_url(self.config.webdav_url, mkv.path),
+            url=join_webdav_url(self.endpoint.webdav_url, mkv.path),
             headers=headers,
         )
 
@@ -204,7 +204,7 @@ def main(
     )
     webdav = webdav or WebDavAdapter(
         WebDavClient(headers={"User-Agent": "find-fel-nzbdav/0.1"}),
-        config,
+        config.endpoints[0],
     )
     probe = probe or MediaProbe(command_timeout=30, sample_seconds=args.probe_seconds)
 
