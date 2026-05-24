@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 
 import db
@@ -65,5 +66,38 @@ def test_insert_title_is_idempotent_and_does_not_overwrite(tmp_path: Path):
             ("Creepshow",),
         ).fetchone()
         assert row == ("2026-05-23T00:00:00", "fel", "profile_7_fel")
+    finally:
+        conn.close()
+
+
+def test_upsert_result_inserts_when_row_missing(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.db")
+    when = datetime.datetime(2026, 5, 23, 12, 34, 56)
+    try:
+        db.upsert_result(conn, "Creepshow", "fel", "profile_7_fel", when)
+        row = conn.execute(
+            "SELECT title, date_checked, verdict, reason FROM titles"
+        ).fetchone()
+        assert row == ("Creepshow", "2026-05-23T12:34:56", "fel", "profile_7_fel")
+    finally:
+        conn.close()
+
+
+def test_upsert_result_updates_existing_row(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.db")
+    try:
+        db.insert_title(conn, "Creepshow")
+        first = datetime.datetime(2026, 5, 23, 10, 0, 0)
+        db.upsert_result(conn, "Creepshow", "unknown", "error_URLError", first)
+        second = datetime.datetime(2026, 5, 23, 11, 0, 0)
+        db.upsert_result(conn, "Creepshow", "fel", "profile_7_fel", second)
+        row = conn.execute(
+            "SELECT date_checked, verdict, reason FROM titles WHERE title=?",
+            ("Creepshow",),
+        ).fetchone()
+        assert row == ("2026-05-23T11:00:00", "fel", "profile_7_fel")
+        # Still exactly one row.
+        count = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
+        assert count == 1
     finally:
         conn.close()

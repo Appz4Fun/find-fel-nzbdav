@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import sqlite3
 from pathlib import Path
 
@@ -32,4 +33,25 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 def insert_title(conn: sqlite3.Connection, title: str) -> None:
     conn.execute("INSERT OR IGNORE INTO titles(title) VALUES (?)", (title,))
+    conn.commit()
+
+
+def upsert_result(
+    conn: sqlite3.Connection,
+    title: str,
+    verdict: str,
+    reason: str,
+    when: datetime.datetime,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO titles(title, date_checked, verdict, reason)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(title) DO UPDATE SET
+            date_checked = excluded.date_checked,
+            verdict      = excluded.verdict,
+            reason       = excluded.reason
+        """,
+        (title, when.isoformat(timespec="seconds"), verdict, reason),
+    )
     conn.commit()
