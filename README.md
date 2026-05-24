@@ -128,6 +128,23 @@ One title per line. Blank lines and `#` comments are skipped:
 
 In `--json` mode the batch output is **NDJSON** — one JSON object per line, flushed after every title so you can `tail -f` mid-run.
 
+### Resume from the database
+
+When `data/find-fel.db` exists, running the tool with no positional title and no `--titles-file` resumes from the database:
+
+```bash
+./find-fel-nzbdav
+```
+
+It processes un-scanned titles first (alphabetical), then retries titles whose last status starts with `error_`. Every scan — single-title, batch file, or resume — upserts the outcome into `data/find-fel.db`.
+
+| Flag | Description | Default |
+|---|---|---|
+| `--db PATH` | SQLite database path | `data/find-fel.db` |
+| `--no-db` | Skip DB writes for this run | off |
+
+`data/*.db` is gitignored, so your scan history stays local.
+
 ### Other flags
 
 | Flag | Description | Default |
@@ -140,6 +157,8 @@ In `--json` mode the batch output is **NDJSON** — one JSON object per line, fl
 | `--probe-seconds N` | Sample length for the slow probe fallback | `10` |
 | `--timeout SECONDS` | NZBDAV job timeout | `1800` |
 | `--poll-interval SECONDS` | NZBDAV poll cadence | `5` |
+| `--db PATH` | SQLite database path | `data/find-fel.db` |
+| `--no-db` | Skip DB writes for this run | off |
 
 ---
 
