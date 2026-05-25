@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from config import NZBDavEndpoint
@@ -17,33 +18,37 @@ from workflow import check_title_with_retries
 _SHUTDOWN = object()
 
 
+@dataclass(frozen=True)
+class ParallelRunSummary:
+    processed: int
+    unprocessed: int
+    aborted: bool
+
+
 def run_parallel(
     titles: Iterable[str],
     endpoints: list[NZBDavEndpoint],
     *,
     hydra,
     probe,
-    max_candidates: int,
+    max_candidates: int | None,
     poll_interval: float,
     nzbdav_timeout: float,
     retries: int,
     retry_wait: float,
+    max_consecutive_failures: int | None = None,
     on_result: Callable[[str, TitleResult, bool], None],
-) -> None:
+) -> ParallelRunSummary:
     if not endpoints:
         raise ValueError("run_parallel requires at least one endpoint")
 
     titles_list = list(titles)
     if not titles_list:
-        return
+        return ParallelRunSummary(processed=0, unprocessed=0, aborted=False)
 
     work_q: queue.Queue = queue.Queue()
     result_q: queue.Queue = queue.Queue()
-
-    for title in titles_list:
-        work_q.put(title)
-    for _ in endpoints:
-        work_q.put(_SHUTDOWN)
+    stop_event = threading.Event()
 
     threads = [
         threading.Thread(
@@ -59,6 +64,7 @@ def run_parallel(
                 nzbdav_timeout,
                 retries,
                 retry_wait,
+                stop_event,
             ),
             daemon=False,
             name=f"find-fel-worker-{index}",
@@ -68,12 +74,59 @@ def run_parallel(
     for thread in threads:
         thread.start()
 
-    for _ in range(len(titles_list)):
-        title, result, failed = result_q.get()
+    next_title_index = 0
+    in_flight = 0
+
+    def dispatch_next() -> None:
+        nonlocal next_title_index, in_flight
+        if next_title_index >= len(titles_list) or stop_event.is_set():
+            return
+        work_q.put(titles_list[next_title_index])
+        next_title_index += 1
+        in_flight += 1
+
+    for _ in range(min(len(endpoints), len(titles_list))):
+        dispatch_next()
+
+    processed = 0
+    consecutive_failures = 0
+    aborted = False
+    while in_flight > 0:
+        try:
+            title, result, failed = result_q.get(timeout=0.1)
+        except queue.Empty:
+            if not any(thread.is_alive() for thread in threads):
+                break
+            continue
+
+        processed += 1
+        in_flight -= 1
         on_result(title, result, failed)
+        if failed:
+            consecutive_failures += 1
+            if (
+                max_consecutive_failures is not None
+                and max_consecutive_failures > 0
+                and consecutive_failures >= max_consecutive_failures
+            ):
+                aborted = True
+                stop_event.set()
+        else:
+            consecutive_failures = 0
+
+        if not aborted:
+            dispatch_next()
+
+    for _ in endpoints:
+        work_q.put(_SHUTDOWN)
 
     for thread in threads:
         thread.join()
+    return ParallelRunSummary(
+        processed=processed,
+        unprocessed=len(titles_list) - processed,
+        aborted=aborted,
+    )
 
 
 def _worker_loop(
@@ -82,17 +135,22 @@ def _worker_loop(
     result_q: queue.Queue,
     hydra,
     probe,
-    max_candidates: int,
+    max_candidates: int | None,
     poll_interval: float,
     nzbdav_timeout: float,
     retries: int,
     retry_wait: float,
+    stop_event: threading.Event,
 ) -> None:
     nzbdav, webdav = _build_adapters(endpoint, poll_interval, nzbdav_timeout)
 
     while True:
+        if stop_event.is_set():
+            return
         item = work_q.get()
         if item is _SHUTDOWN:
+            return
+        if stop_event.is_set():
             return
         title: str = item
         result, failed = check_title_with_retries(

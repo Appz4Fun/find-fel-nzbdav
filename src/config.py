@@ -28,7 +28,7 @@ class Config:
     endpoints: tuple[NZBDavEndpoint, ...]
     hydra_url: str
     hydra_api_key: str
-    max_candidates: int = 3
+    max_candidates: int | None = None
     poll_interval: float = 5.0
     timeout: float = 1800.0
 
@@ -86,7 +86,9 @@ class Config:
             endpoints=endpoints,
             hydra_url=hydra_url,
             hydra_api_key=values["HYDRA_API_KEY"],
-            max_candidates=int(values.get("FEL_MAX_CANDIDATES", "3")),
+            max_candidates=_parse_optional_candidate_limit(
+                values.get("FEL_MAX_CANDIDATES")
+            ),
             poll_interval=float(values.get("FEL_POLL_INTERVAL", "5")),
             timeout=float(values.get("FEL_TIMEOUT", "1800")),
         )
@@ -111,6 +113,16 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 def normalize_url(url: str) -> str:
     return url.strip().rstrip("/")
+
+
+def _parse_optional_candidate_limit(value: str | None) -> int | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"", "0", "none", "all", "unlimited", "infinite"}:
+        return None
+    parsed = int(normalized)
+    return parsed if parsed > 0 else None
 
 
 def _load_pool(path: Path) -> tuple[NZBDavEndpoint, ...]:

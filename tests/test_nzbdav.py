@@ -4,6 +4,7 @@ import pytest
 
 from nzbdav import (
     NZBDavClient,
+    NZBDavJobFailed,
     storage_to_webdav_path,
     wait_for_terminal_job,
 )
@@ -114,6 +115,30 @@ def test_history_returns_completed_storage():
     assert history.storage == "/content/uncategorized/job/"
 
 
+def test_history_returns_failure_message_when_present():
+    class FakeHttp:
+        def get_json(self, url, timeout=10):
+            return {
+                "history": {
+                    "slots": [
+                        {
+                            "nzo_id": "abc",
+                            "status": "Failed",
+                            "name": "job",
+                            "fail_message": "Article with message-id abc not found.",
+                        }
+                    ]
+                }
+            }
+
+    client = NZBDavClient(FakeHttp(), "http://server:3000", "secret")
+
+    history = client.history("abc")
+
+    assert history is not None
+    assert history.fail_message == "Article with message-id abc not found."
+
+
 def test_wait_for_terminal_job_polls_until_history_terminal_status():
     statuses = ["Downloading", "Downloading"]
     sleeps = []
@@ -158,6 +183,31 @@ def test_wait_for_terminal_job_raises_on_failed_status():
 
     with pytest.raises(RuntimeError, match="terminal status Failed"):
         wait_for_terminal_job(FakeClient(), "abc", sleep=lambda _: None)
+
+
+def test_wait_for_terminal_job_raises_typed_error_with_fail_message():
+    class FakeClient:
+        def queue_status(self, nzo_id):
+            return None
+
+        def history(self, nzo_id):
+            return type(
+                "Job",
+                (),
+                {
+                    "status": "Failed",
+                    "storage": None,
+                    "fail_message": "Article with message-id abc not found.",
+                },
+            )()
+
+    with pytest.raises(NZBDavJobFailed) as raised:
+        wait_for_terminal_job(FakeClient(), "abc", sleep=lambda _: None)
+
+    assert raised.value.nzo_id == "abc"
+    assert raised.value.status == "Failed"
+    assert raised.value.fail_message == "Article with message-id abc not found."
+    assert "Article with message-id abc not found." in str(raised.value)
 
 
 def test_wait_for_terminal_job_timeout_uses_injected_clock():

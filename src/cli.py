@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import replace
 import datetime
 import json
 from pathlib import Path
@@ -15,7 +15,7 @@ from config import Config
 import db
 import parallel
 from httpclient import HttpClient, redact_url
-from hydra import search_hydra
+from hydra import HydraSearchResult, search_hydra
 from models import (
     VERDICT_FEL,
     VERDICT_NOT_FEL,
@@ -35,6 +35,17 @@ from workflow import StreamCandidate, check_title, check_title_with_retries
 
 
 _DEFAULT_MAX_CONSECUTIVE_FAILURES = 3
+_PROFILE_UNDETECTED_REASON = "dv_4k_profile_undetected"
+_PROFILE_UNDETECTED_LOG_MESSAGE = (
+    "DV 4k was found but unable to detect profile skipping to next title"
+)
+_PERSIST_NOT_FEL_REASONS = {
+    "no_4k_video_candidates",
+    "no_dv_4k_candidates",
+    "profile_7_mel",
+    "profile_7_low_el_bitrate",
+    "not_profile_7",
+}
 
 
 class HydraAdapter:
@@ -42,13 +53,12 @@ class HydraAdapter:
         self.http = http
         self.config = config
 
-    def search(self, title: str) -> list[Candidate]:
+    def search(self, title: str) -> HydraSearchResult:
         return search_hydra(
             self.http,
             self.config.hydra_url,
             self.config.hydra_api_key,
             title,
-            limit=100,
             timeout=30,
         )
 
@@ -230,12 +240,6 @@ def main(
         titles = list(db.pending_titles(db_conn))
 
     if len(config.endpoints) > 1:
-        if args.max_consecutive_failures != _DEFAULT_MAX_CONSECUTIVE_FAILURES:
-            print(
-                "warning: --max-consecutive-failures has no effect with a pool active",
-                file=sys.stderr,
-            )
-
         state = {"has_definitive_verdict": False}
 
         def _on_result(title: str, result, failed: bool) -> None:
@@ -245,10 +249,13 @@ def main(
                 print(render_text(result), flush=True)
             try:
                 log_file_handle.write(format_log_line(result) + "\n")
+                skip_message = skip_log_message(result)
+                if skip_message:
+                    log_file_handle.write(skip_message + "\n")
                 log_file_handle.flush()
             except Exception:
                 pass
-            if db_conn is not None:
+            if db_conn is not None and should_persist_result(result):
                 db.upsert_result(
                     db_conn,
                     title,
@@ -256,12 +263,12 @@ def main(
                     result.reason or "",
                     datetime.datetime.now(),
                 )
-            if result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
+            if should_persist_result(result):
                 state["has_definitive_verdict"] = True
 
         runner = parallel_run if parallel_run is not None else parallel.run_parallel
         with log_path.open("a", encoding="utf-8") as log_file_handle:
-            runner(
+            summary = runner(
                 titles,
                 list(config.endpoints),
                 hydra=hydra,
@@ -271,11 +278,19 @@ def main(
                 nzbdav_timeout=config.timeout,
                 retries=args.retries,
                 retry_wait=args.retry_wait,
+                max_consecutive_failures=args.max_consecutive_failures,
                 on_result=_on_result,
             )
 
         if db_conn is not None:
             db_conn.close()
+        if summary is not None and getattr(summary, "aborted", False):
+            print(
+                f"aborting: {args.max_consecutive_failures} consecutive failures "
+                f"({getattr(summary, 'unprocessed', 0)} titles unprocessed)",
+                file=sys.stderr,
+            )
+            return 3
         return 0 if state["has_definitive_verdict"] else 2
 
     # else: fall through to the existing sequential path below
@@ -305,8 +320,11 @@ def main(
                 print(render_text(result), flush=True)
 
             log_file.write(format_log_line(result) + "\n")
+            skip_message = skip_log_message(result)
+            if skip_message:
+                log_file.write(skip_message + "\n")
             log_file.flush()
-            if db_conn is not None:
+            if db_conn is not None and should_persist_result(result):
                 db.upsert_result(
                     db_conn,
                     title,
@@ -315,7 +333,7 @@ def main(
                     datetime.datetime.now(),
                 )
 
-            if result.verdict in {VERDICT_FEL, VERDICT_NOT_FEL}:
+            if should_persist_result(result):
                 has_definitive_verdict = True
 
             if failed:
@@ -401,6 +419,21 @@ def format_log_line(result: TitleResult, now: datetime.datetime | None = None) -
     return f"[{timestamp}] {result.title}: {result.verdict} ({result.reason})"
 
 
+def should_persist_result(result: TitleResult) -> bool:
+    if result.verdict == VERDICT_FEL:
+        return True
+    return (
+        result.verdict == VERDICT_NOT_FEL
+        and (result.reason or "") in _PERSIST_NOT_FEL_REASONS
+    )
+
+
+def skip_log_message(result: TitleResult) -> str | None:
+    if result.reason == _PROFILE_UNDETECTED_REASON:
+        return _PROFILE_UNDETECTED_LOG_MESSAGE
+    return None
+
+
 def _title_result_payload(result: TitleResult) -> dict:
     return {
         "title": result.title,
@@ -427,9 +460,7 @@ def _candidate_result_payload(result: CandidateResult) -> dict:
 
 
 def _replace_config(config: Config, **changes) -> Config:
-    values = asdict(config)
-    values.update(changes)
-    return Config(**values)
+    return replace(config, **changes)
 
 
 def _safe_job_name(title: str) -> str:

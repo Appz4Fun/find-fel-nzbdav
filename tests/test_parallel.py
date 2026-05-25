@@ -4,7 +4,8 @@ import threading
 from dataclasses import dataclass
 
 from config import NZBDavEndpoint
-from models import TitleResult
+from hydra import HydraSearchResult
+from models import Candidate, TitleResult
 import parallel
 
 
@@ -18,14 +19,19 @@ class _RecordingHydra:
         def search(title: str):
             with self.lock:
                 self.seen.append((title, endpoint_url))
-            return []
+            return _no_dv_4k_hydra_result()
         return search
 
 
 class _StaticHydra:
     """Simpler hydra: always returns empty so workers report not_fel quickly."""
     def search(self, title: str):
-        return []
+        return _no_dv_4k_hydra_result()
+
+
+def _no_dv_4k_hydra_result() -> HydraSearchResult:
+    candidate = Candidate("Movie 2160p UHD BluRay REMUX HDR10 HEVC", "http://nzb/one", 10)
+    return HydraSearchResult(raw_candidates=[candidate], candidates=[])
 
 
 def test_run_parallel_processes_all_titles_across_endpoints():
@@ -121,6 +127,37 @@ def test_run_parallel_marks_failed_titles_when_hydra_raises():
         assert failed is True
         assert result.verdict == "unknown"
         assert result.reason == "error_RuntimeError"
+
+
+def test_run_parallel_aborts_after_consecutive_infrastructure_failures():
+    class BrokenHydra:
+        def search(self, title):
+            raise RuntimeError(f"hydra broken on {title}")
+
+    endpoints = [
+        NZBDavEndpoint(url="http://dav1", api_key="A", webdav_url="http://dav1"),
+    ]
+    titles = ["a", "b", "c", "d"]
+    results: list[tuple[str, TitleResult, bool]] = []
+
+    summary = parallel.run_parallel(
+        titles,
+        endpoints,
+        hydra=BrokenHydra(),
+        probe=object(),
+        max_candidates=3,
+        poll_interval=0.0,
+        nzbdav_timeout=1.0,
+        retries=0,
+        retry_wait=0.0,
+        max_consecutive_failures=2,
+        on_result=lambda title, result, failed: results.append((title, result, failed)),
+    )
+
+    assert summary.aborted is True
+    assert summary.processed == 2
+    assert summary.unprocessed == 2
+    assert [title for title, _, _ in results] == ["a", "b"]
 
 
 def test_run_parallel_workers_use_their_assigned_endpoint():

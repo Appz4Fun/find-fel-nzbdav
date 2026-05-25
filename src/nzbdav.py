@@ -25,7 +25,24 @@ class NZBDavJob:
     status: str
     name: str | None = None
     storage: str | None = None
+    fail_message: str | None = None
     raw: dict[str, Any] | None = None
+
+
+class NZBDavJobFailed(RuntimeError):
+    def __init__(
+        self,
+        nzo_id: str,
+        status: str,
+        fail_message: str | None = None,
+    ) -> None:
+        self.nzo_id = nzo_id
+        self.status = status
+        self.fail_message = fail_message
+        message = f"NZBDAV job {nzo_id} reached terminal status {status}"
+        if fail_message:
+            message = f"{message}: {fail_message}"
+        super().__init__(message)
 
 
 TERMINAL_SUCCESS_STATUSES = {"completed"}
@@ -115,8 +132,10 @@ def wait_for_terminal_job(
         if queue_job is not None:
             status = queue_job.status.strip().lower()
             if status in TERMINAL_FAILURE_STATUSES:
-                raise RuntimeError(
-                    f"NZBDAV job {nzo_id} reached terminal status {queue_job.status}"
+                raise NZBDavJobFailed(
+                    nzo_id,
+                    queue_job.status,
+                    getattr(queue_job, "fail_message", None),
                 )
         else:
             history_job = client.history(nzo_id)
@@ -125,8 +144,10 @@ def wait_for_terminal_job(
                 if status in TERMINAL_SUCCESS_STATUSES:
                     return history_job
                 if status in TERMINAL_FAILURE_STATUSES:
-                    raise RuntimeError(
-                        f"NZBDAV job {nzo_id} reached terminal status {history_job.status}"
+                    raise NZBDavJobFailed(
+                        nzo_id,
+                        history_job.status,
+                        getattr(history_job, "fail_message", None),
                     )
 
         if monotonic() >= deadline:
@@ -176,8 +197,17 @@ def _find_job(slots: list[dict[str, Any]], nzo_id: str) -> NZBDavJob | None:
                 status=str(slot.get("status", "")),
                 name=slot.get("name") or slot.get("filename"),
                 storage=slot.get("storage"),
+                fail_message=_slot_fail_message(slot),
                 raw=slot,
             )
+    return None
+
+
+def _slot_fail_message(slot: dict[str, Any]) -> str | None:
+    for key in ("fail_message", "fail_msg", "failure", "error", "message"):
+        value = slot.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return None
 
 

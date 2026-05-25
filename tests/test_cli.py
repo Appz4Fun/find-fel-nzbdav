@@ -13,7 +13,9 @@ from cli import (
     render_json,
 )
 import cli as cli_module
+from hydra import HydraSearchResult
 from models import Candidate, CandidateResult, TitleResult
+import parallel
 
 
 ENV_TEXT = (
@@ -52,6 +54,18 @@ def _catalog_release(title: str, normalized_title: str, year: int) -> CatalogRel
         is_4k=True,
         is_dolby_vision=True,
     )
+
+
+def _raw_hydra_result(*release_titles: str) -> HydraSearchResult:
+    raw_candidates = [
+        Candidate(release_title, f"http://nzb/{index}", 10)
+        for index, release_title in enumerate(release_titles)
+    ]
+    return HydraSearchResult(raw_candidates=raw_candidates, candidates=[])
+
+
+def _no_dv_4k_hydra_result() -> HydraSearchResult:
+    return _raw_hydra_result("Movie 2160p UHD BluRay REMUX HDR10 HEVC")
 
 
 def test_catalog_json_uses_injected_source_without_env(capsys):
@@ -188,7 +202,7 @@ def test_main_json_returns_zero_for_not_fel_no_dv(tmp_path: Path, capsys):
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     exit_code = main(
         ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--json", "Creepshow"],
@@ -285,10 +299,17 @@ def test_main_titles_file_emits_one_json_line_per_title(tmp_path: Path, capsys):
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--json", "--titles-file", str(titles_path)],
+        [
+            "--env", str(env_path),
+            "--no-db",
+            "--pool", str(tmp_path / "no-pool.yaml"),
+            "--json",
+            "--titles-file", str(titles_path),
+            "--retries", "0",
+        ],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -315,10 +336,17 @@ def test_main_titles_file_continues_after_per_title_exception(tmp_path: Path, ca
         def search(self, title):
             if title == "Boom":
                 raise RuntimeError("hydra outage")
-            return []
+            return _no_dv_4k_hydra_result()
 
     exit_code = main(
-        ["--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"), "--json", "--titles-file", str(titles_path)],
+        [
+            "--env", str(env_path),
+            "--no-db",
+            "--pool", str(tmp_path / "no-pool.yaml"),
+            "--json",
+            "--titles-file", str(titles_path),
+            "--retries", "0",
+        ],
         hydra=FakeHydra(),
         nzbdav=object(),
         webdav=object(),
@@ -388,13 +416,14 @@ def test_main_writes_one_log_line_per_title_to_explicit_log_file(tmp_path: Path)
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     main(
         [
             "--env", str(env_path), "--no-db", "--pool", str(tmp_path / "no-pool.yaml"),
             "--titles-file", str(titles_path),
             "--log-file", str(log_path),
+            "--retries", "0",
         ],
         hydra=FakeHydra(),
         nzbdav=object(),
@@ -416,7 +445,7 @@ def test_main_creates_log_parent_directory_when_missing(tmp_path: Path):
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     main(
         [
@@ -445,7 +474,7 @@ def test_main_logs_error_verdicts_for_per_title_exceptions(tmp_path: Path):
         def search(self, title):
             if title == "Boom":
                 raise RuntimeError("hydra outage")
-            return []
+            return _no_dv_4k_hydra_result()
 
     main(
         [
@@ -476,7 +505,7 @@ def test_main_single_title_upserts_result_to_db(tmp_path: Path, capsys):
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     exit_code = main(
         [
@@ -505,6 +534,106 @@ def test_main_single_title_upserts_result_to_db(tmp_path: Path, capsys):
     assert row == ("Creepshow", "not_fel", "no_dv_4k_candidates")
 
 
+def test_main_skips_db_insert_when_hydra_has_no_raw_results(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+
+    class FakeHydra:
+        def search(self, title):
+            return HydraSearchResult(raw_candidates=[], candidates=[])
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
+            "--log-file", str(tmp_path / "run.log"),
+            "--json",
+            "Creepshow",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+    )
+
+    assert exit_code == 2
+    capsys.readouterr()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0
+
+
+def test_main_skips_db_insert_and_logs_when_dv_profile_is_undetected(
+    tmp_path: Path, capsys
+):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    db_path = tmp_path / "find-fel.db"
+    log_path = tmp_path / "run.log"
+    candidate = Candidate("Movie 2160p UHD BluRay REMUX DV HEVC", "http://nzb/one", 10)
+
+    class FakeHydra:
+        def search(self, title):
+            return HydraSearchResult(raw_candidates=[candidate], candidates=[candidate])
+
+    class FakeNZBDav:
+        def submit_and_wait(self, candidate):
+            return type("Completed", (), {"nzo_id": "abc", "storage": "/content/job/"})()
+
+    class FakeWebDAV:
+        def find_mkv(self, storage):
+            return type(
+                "Mkv",
+                (),
+                {"path": "/content/job/movie.mkv", "url": "http://stream", "headers": {}},
+            )()
+
+    class FakeProbe:
+        def probe(self, url, headers):
+            return type(
+                "Probe",
+                (),
+                {
+                    "verdict": "unknown",
+                    "reason": "profile_7_el_type_unknown",
+                    "summary": "summary",
+                },
+            )()
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--pool", str(tmp_path / "no-pool.yaml"),
+            "--log-file", str(log_path),
+            "--json",
+            "Creepshow",
+        ],
+        hydra=FakeHydra(),
+        nzbdav=FakeNZBDav(),
+        webdav=FakeWebDAV(),
+        probe=FakeProbe(),
+    )
+
+    assert exit_code == 2
+    capsys.readouterr()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0
+    assert (
+        "DV 4k was found but unable to detect profile skipping to next title"
+        in log_path.read_text(encoding="utf-8")
+    )
+
+
 def test_main_titles_file_upserts_each_title_to_db(tmp_path: Path, capsys):
     env_path = tmp_path / ".env"
     env_path.write_text(ENV_TEXT, encoding="utf-8")
@@ -515,7 +644,7 @@ def test_main_titles_file_upserts_each_title_to_db(tmp_path: Path, capsys):
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     exit_code = main(
         [
@@ -555,7 +684,7 @@ def test_main_no_db_flag_disables_db_writes(tmp_path: Path, capsys):
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     exit_code = main(
         [
@@ -603,7 +732,7 @@ def test_main_default_mode_processes_pending_titles_from_db(tmp_path: Path, caps
     class FakeHydra:
         def search(self, title):
             seen_titles.append(title)
-            return []
+            return _no_dv_4k_hydra_result()
 
     exit_code = main(
         [
@@ -731,6 +860,65 @@ def test_main_default_mode_consecutive_failure_abort(tmp_path: Path, capsys):
     assert exit_code == 3
 
 
+def test_main_pool_mode_consecutive_failure_abort(tmp_path: Path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text(ENV_TEXT, encoding="utf-8")
+    pool_path = tmp_path / "pool.yaml"
+    _write_pool_yaml(
+        pool_path,
+        [
+            {"url": "http://dav1:3000", "api_key": "A"},
+            {"url": "http://dav2:3000", "api_key": "B"},
+        ],
+    )
+    db_path = tmp_path / "find-fel.db"
+
+    import db as db_module
+    conn = db_module.connect(db_path)
+    try:
+        for title in ["A", "B", "C", "D"]:
+            db_module.insert_title(conn, title)
+    finally:
+        conn.close()
+
+    def fake_parallel(titles, endpoints, *, on_result, **kwargs):
+        assert kwargs["max_consecutive_failures"] == 2
+        for title in list(titles)[:2]:
+            on_result(title, TitleResult.unknown(title, "error_Hydra_900"), True)
+        return parallel.ParallelRunSummary(processed=2, unprocessed=2, aborted=True)
+
+    exit_code = main(
+        [
+            "--env", str(env_path),
+            "--db", str(db_path),
+            "--pool", str(pool_path),
+            "--log-file", str(tmp_path / "run.log"),
+            "--max-consecutive-failures", "2",
+        ],
+        hydra=object(),
+        nzbdav=object(),
+        webdav=object(),
+        probe=object(),
+        parallel_run=fake_parallel,
+    )
+
+    capsys.readouterr()
+    assert exit_code == 3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT title, reason FROM titles WHERE date_checked IS NOT NULL ORDER BY title"
+        ).fetchall()
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM titles WHERE date_checked IS NULL"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert rows == []
+    assert pending == 4
+
+
 def _write_pool_yaml(path: Path, entries: list[dict]) -> None:
     import yaml
     path.write_text(yaml.safe_dump(entries), encoding="utf-8")
@@ -765,8 +953,11 @@ def test_main_uses_parallel_path_when_pool_yaml_present(tmp_path: Path, capsys):
         nzbdav_timeout,
         retries,
         retry_wait,
+        max_consecutive_failures,
         on_result,
     ):
+        assert max_candidates is None
+        assert max_consecutive_failures == 3
         title_list = list(titles)
         parallel_calls.append((title_list, len(endpoints)))
         # Drive the callback so DB writes happen.
@@ -774,6 +965,11 @@ def test_main_uses_parallel_path_when_pool_yaml_present(tmp_path: Path, capsys):
         from models import TitleResult
         for title in title_list:
             on_result(title, TitleResult.not_fel(title, "no_dv_4k_candidates"), False)
+        return parallel.ParallelRunSummary(
+            processed=len(title_list),
+            unprocessed=0,
+            aborted=False,
+        )
 
     exit_code = main(
         [
@@ -804,7 +1000,7 @@ def test_main_uses_sequential_path_when_pool_yaml_absent(tmp_path: Path, capsys)
 
     class FakeHydra:
         def search(self, title):
-            return []
+            return _no_dv_4k_hydra_result()
 
     parallel_called = []
 
@@ -832,7 +1028,7 @@ def test_main_uses_sequential_path_when_pool_yaml_absent(tmp_path: Path, capsys)
     assert parallel_called == []  # sequential path used
 
 
-def test_main_warns_when_max_consecutive_failures_passed_with_pool(
+def test_main_honors_max_consecutive_failures_with_pool(
     tmp_path: Path, capsys
 ):
     env_path = tmp_path / ".env"
@@ -849,10 +1045,14 @@ def test_main_warns_when_max_consecutive_failures_passed_with_pool(
     titles_path.write_text("Creepshow\n", encoding="utf-8")
     db_path = tmp_path / "find-fel.db"
 
+    seen_limits: list[int] = []
+
     def fake_parallel(titles, endpoints, *, on_result, **kwargs):
         from models import TitleResult
+        seen_limits.append(kwargs["max_consecutive_failures"])
         for title in titles:
             on_result(title, TitleResult.fel(title, "profile_7_fel"), False)
+        return parallel.ParallelRunSummary(processed=1, unprocessed=0, aborted=False)
 
     main(
         [
@@ -871,4 +1071,5 @@ def test_main_warns_when_max_consecutive_failures_passed_with_pool(
     )
 
     err = capsys.readouterr().err
-    assert "no effect with a pool active" in err
+    assert "no effect with a pool active" not in err
+    assert seen_limits == [1]
