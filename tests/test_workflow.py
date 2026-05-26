@@ -165,6 +165,40 @@ def test_article_health_submit_failure_is_labeled_and_continues():
     assert result.candidates[1].status == "fel"
 
 
+def test_same_release_from_different_links_is_tried_after_article_failure():
+    first = Candidate("same release 2160p UHD BluRay DV", "http://nzb/dead", 20)
+    second = Candidate("same release 2160p UHD BluRay DV", "http://nzb/live", 20)
+    submitted = []
+
+    class FakeHydra:
+        def search(self, title):
+            return [first, second]
+
+    class FakeNZBDav:
+        def submit_and_wait(self, candidate):
+            submitted.append(candidate.link)
+            if candidate is first:
+                raise RuntimeError("Article with message-id abc not found.")
+            return type("Completed", (), {"nzo_id": "live-id", "storage": "/content/job/"})()
+
+    class FakeWebDAV:
+        def find_mkv(self, storage):
+            return type(
+                "Mkv",
+                (),
+                {"path": "/content/job/movie.mkv", "url": "http://stream", "headers": {}},
+            )()
+
+    class FakeProbe:
+        def probe(self, url, headers):
+            return ProbeResult("fel", "profile_7_fel", "ok")
+
+    result = check_title("Title", FakeHydra(), FakeNZBDav(), FakeWebDAV(), FakeProbe())
+
+    assert result.verdict == "fel"
+    assert submitted == ["http://nzb/dead", "http://nzb/live"]
+
+
 def test_default_candidate_loop_has_no_three_release_cap():
     candidates = [
         Candidate(f"bad release {index} 2160p UHD BluRay DV", f"http://nzb/bad-{index}", 20 - index)
@@ -342,7 +376,7 @@ def test_stops_at_first_valid_non_fel_dv_profile():
 
 def test_deduplicates_candidates_before_submitting_top_three():
     duplicate_a = Candidate("same 2160p UHD DV", "http://nzb/a", 10)
-    duplicate_b = Candidate("same 2160p UHD DV", "http://nzb/b", 10)
+    duplicate_b = Candidate("same 2160p UHD DV", "http://nzb/a", 10)
     unique = Candidate("unique 2160p UHD DV", "http://nzb/c", 9)
     submitted = []
 

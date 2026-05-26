@@ -135,6 +135,22 @@ ROMAN_NUMERAL_TOKENS = {
     "x",
 }
 
+KNOWN_QUERY_VARIANTS = {
+    "hellboy animated": (
+        "Hellboy Animated Sword of Storms",
+        "Hellboy Animated Blood and Iron",
+    ),
+    "kin": ("Kin 2018",),
+    "the conjuring 4 last rites": ("The Conjuring Last Rites",),
+    "three colors": ("Three Colors Blue", "Three Colors White", "Three Colors Red"),
+    "us": ("Us 2019",),
+}
+SKIP_ORIGINAL_QUERY_KEYS = {"kin", "us"}
+QUERY_VARIANT_LIMIT_CAPS = {
+    "kin 2018": 1000,
+    "us 2019": 1000,
+}
+
 
 @dataclass(frozen=True)
 class HydraSearchResult:
@@ -254,6 +270,46 @@ def search_hydra(
     limit: int = HYDRA_DEFAULT_LIMIT,
     timeout: float = 30,
 ) -> HydraSearchResult:
+    raw_candidates: list[Candidate] = []
+    first_error: Exception | None = None
+    had_success = False
+
+    for variant in query_variants(query):
+        try:
+            raw_candidates.extend(
+                _search_hydra_variant(
+                    http,
+                    hydra_url,
+                    api_key,
+                    variant,
+                    limit=_limit_for_query_variant(variant, limit),
+                    timeout=timeout,
+                )
+            )
+            had_success = True
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+
+    if not had_success and first_error is not None:
+        raise first_error
+
+    raw_candidates = dedupe_hydra_candidates(raw_candidates)
+    return HydraSearchResult(
+        raw_candidates=raw_candidates,
+        candidates=filter_and_rank_candidates(raw_candidates),
+    )
+
+
+def _search_hydra_variant(
+    http: TextHttpClient,
+    hydra_url: str,
+    api_key: str,
+    query: str,
+    *,
+    limit: int,
+    timeout: float,
+) -> list[Candidate]:
     params = urlencode(
         {
             "t": "movie",
@@ -267,15 +323,44 @@ def search_hydra(
     )
     url = f"{hydra_url.rstrip('/')}/api?{params}"
     raw_candidates = parse_hydra_results(http.get_text(url, timeout=timeout))
-    matching_candidates = filter_title_matches(raw_candidates, query)
-    return HydraSearchResult(
-        raw_candidates=matching_candidates,
-        candidates=filter_and_rank_candidates(matching_candidates),
-    )
+    return filter_title_matches(raw_candidates, query)
+
+
+def query_variants(query: str) -> list[str]:
+    variants: list[str] = []
+    query_key = _query_key(query)
+    variants.extend(KNOWN_QUERY_VARIANTS.get(query_key, ()))
+    variants.extend(_repeated_and_title_variants(query))
+    if query_key not in SKIP_ORIGINAL_QUERY_KEYS:
+        variants.append(query)
+    return _dedupe_strings(variants)
+
+
+def _limit_for_query_variant(query: str, requested_limit: int) -> int:
+    cap = QUERY_VARIANT_LIMIT_CAPS.get(_query_key(query))
+    if cap is None:
+        return requested_limit
+    return min(requested_limit, cap)
 
 
 def normalize_hydra_query(query: str) -> str:
     return re.sub(r"[`'’]", "", query).strip()
+
+
+def dedupe_hydra_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    deduped: list[Candidate] = []
+    seen: set[tuple[str, str, int]] = set()
+    for candidate in candidates:
+        key = (
+            re.sub(r"[^a-z0-9]+", " ", candidate.release_title.lower()).strip(),
+            candidate.link,
+            candidate.size_bytes,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
 
 
 def _title_tokens(title: str) -> list[str]:
@@ -287,6 +372,33 @@ def _title_tokens(title: str) -> list[str]:
             continue
         tokens.append(token)
     return tokens
+
+
+def _query_key(query: str) -> str:
+    return " ".join(_title_tokens(query))
+
+
+def _repeated_and_title_variants(query: str) -> list[str]:
+    parts = [part.strip() for part in re.split(r"\s+and\s+", query, maxsplit=1, flags=re.IGNORECASE)]
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return []
+    left_tokens = _title_tokens(parts[0])
+    right_tokens = _title_tokens(parts[1])
+    if not left_tokens or right_tokens[: len(left_tokens)] != left_tokens:
+        return []
+    return parts
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = _query_key(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value)
+    return deduped
 
 
 def _strip_leading_article(tokens: list[str]) -> list[str]:

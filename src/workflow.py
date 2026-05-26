@@ -234,10 +234,10 @@ def _failure_reason(exc: Exception) -> str:
 
 
 def dedupe_candidates(candidates: list[Candidate]) -> list[Candidate]:
-    seen: set[tuple[str, int]] = set()
+    seen: set[str] = set()
     deduped: list[Candidate] = []
     for candidate in candidates:
-        key = (_normalize_release_title(candidate.release_title), candidate.size_bytes)
+        key = candidate.link
         if key in seen:
             continue
         seen.add(key)
@@ -259,7 +259,3 @@ def _submit_failure_reason(exc: Exception) -> str:
     if "article" in text and "not found" in text:
         return "article_health_failed"
     return "submit_failed"
-
-
-def _normalize_release_title(title: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()

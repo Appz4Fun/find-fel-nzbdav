@@ -34,6 +34,21 @@ RSS = """<?xml version="1.0"?>
 </channel></rss>"""
 
 
+def _rss_item(title: str, link: str = "http://hydra/getnzb/one", size: int = 9000) -> str:
+    return f"""<?xml version="1.0"?>
+<rss><channel>
+  <item>
+    <title>{title}</title>
+    <link>{link}</link>
+    <newznab:attr xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/" name="size" value="{size}" />
+  </item>
+</channel></rss>"""
+
+
+EMPTY_RSS = """<?xml version="1.0"?>
+<rss><channel></channel></rss>"""
+
+
 def test_parse_hydra_results_extracts_title_link_size_and_indexer():
     results = parse_hydra_results(RSS)
 
@@ -209,3 +224,151 @@ def test_search_hydra_treats_only_sequel_hits_as_no_matching_results():
     assert found.raw_count == 0
     assert found.has_4k_video is False
     assert found.candidates == []
+
+
+def test_search_hydra_uses_year_variant_for_short_ambiguous_title_before_timeout():
+    calls = []
+
+    class FakeHttp:
+        def get_text(self, url, timeout=30):
+            query = parse_qs(urlsplit(url).query)["q"][0]
+            calls.append(query)
+            if query == "Kin":
+                raise AssertionError("short ambiguous original query should be skipped")
+            if query == "Kin 2018":
+                return _rss_item(
+                    "Kin.2018.DV.FRE.UHD.BluRay.2160p.HEVC.DTSMA.DL.Remux-TvR"
+                )
+            return EMPTY_RSS
+
+    found = search_hydra(FakeHttp(), "http://server:5076", "key", "Kin", limit=100)
+
+    assert calls == ["Kin 2018"]
+    assert [candidate.release_title for candidate in found.candidates] == [
+        "Kin.2018.DV.FRE.UHD.BluRay.2160p.HEVC.DTSMA.DL.Remux-TvR"
+    ]
+
+
+def test_search_hydra_caps_known_short_title_variant_limit():
+    seen_limits = []
+
+    class FakeHttp:
+        def get_text(self, url, timeout=30):
+            params = parse_qs(urlsplit(url).query)
+            seen_limits.append(params["limit"][0])
+            assert params["q"] == ["Us 2019"]
+            return _rss_item("Us.2019.UHD.BluRay.2160p.TrueHD.Atmos.7.1.DV.HEVC.REMUX-FraMeSToR")
+
+    found = search_hydra(FakeHttp(), "http://server:5076", "key", "Us")
+
+    assert seen_limits == ["1000"]
+    assert found.candidates[0].release_title.startswith("Us.2019")
+
+
+def test_search_hydra_combines_known_double_feature_title_variants():
+    calls = []
+
+    class FakeHttp:
+        def get_text(self, url, timeout=30):
+            query = parse_qs(urlsplit(url).query)["q"][0]
+            calls.append(query)
+            if query == "Jack Reacher":
+                return _rss_item(
+                    "Jack.Reacher.2012.UHD.BluRay.2160p.DTS-HD.MA.7.1.DV.HEVC.REMUX-FraMeSToR",
+                    link="http://hydra/getnzb/reacher",
+                    size=6000,
+                )
+            if query == "Jack Reacher Never Go Back":
+                return _rss_item(
+                    "Jack.Reacher.Never.Go.Back.2016.HYBRID.2160p.BluRay.REMUX.HEVC.DV.TrueHD.Atmos.7.1-Flights",
+                    link="http://hydra/getnzb/reacher-2",
+                    size=7000,
+                )
+            return EMPTY_RSS
+
+    found = search_hydra(
+        FakeHttp(),
+        "http://server:5076",
+        "key",
+        "Jack Reacher and Jack Reacher Never Go Back",
+        limit=100,
+    )
+
+    assert calls == [
+        "Jack Reacher",
+        "Jack Reacher Never Go Back",
+        "Jack Reacher and Jack Reacher Never Go Back",
+    ]
+    assert [candidate.link for candidate in found.candidates] == [
+        "http://hydra/getnzb/reacher-2",
+        "http://hydra/getnzb/reacher",
+    ]
+
+
+def test_search_hydra_uses_known_collection_member_variants():
+    calls = []
+
+    class FakeHttp:
+        def get_text(self, url, timeout=30):
+            query = parse_qs(urlsplit(url).query)["q"][0]
+            calls.append(query)
+            if query == "Three Colors Blue":
+                return _rss_item(
+                    "Three.Colors.Blue.1993.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.FLAC.2.0-LUMiERE",
+                    link="http://hydra/getnzb/blue",
+                    size=6000,
+                )
+            if query == "Three Colors White":
+                return _rss_item(
+                    "Three.Colors.White.1994.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.FLAC.2.0-LUMiERE",
+                    link="http://hydra/getnzb/white",
+                    size=6500,
+                )
+            if query == "Three Colors Red":
+                return _rss_item(
+                    "Three.Colors.Red.1994.REPACK.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.FLAC.2.0-LUMiERE",
+                    link="http://hydra/getnzb/red",
+                    size=7000,
+                )
+            return EMPTY_RSS
+
+    found = search_hydra(
+        FakeHttp(), "http://server:5076", "key", "Three Colors", limit=100
+    )
+
+    assert calls == [
+        "Three Colors Blue",
+        "Three Colors White",
+        "Three Colors Red",
+        "Three Colors",
+    ]
+    assert [candidate.link for candidate in found.candidates] == [
+        "http://hydra/getnzb/red",
+        "http://hydra/getnzb/white",
+        "http://hydra/getnzb/blue",
+    ]
+
+
+def test_search_hydra_uses_franchise_title_without_catalog_ordinal():
+    calls = []
+
+    class FakeHttp:
+        def get_text(self, url, timeout=30):
+            query = parse_qs(urlsplit(url).query)["q"][0]
+            calls.append(query)
+            if query == "The Conjuring Last Rites":
+                return _rss_item(
+                    "The.Conjuring.Last.Rites.2025.iNTERNAL.BluRay.2160p.UHD.MULTi.REMUX.HEVC.10bit.DV.Atmos.DTS-HD.MA.7.1-Aisha"
+                )
+            return EMPTY_RSS
+
+    found = search_hydra(
+        FakeHttp(),
+        "http://server:5076",
+        "key",
+        "The Conjuring 4 Last Rites",
+        limit=100,
+    )
+
+    assert calls == ["The Conjuring Last Rites", "The Conjuring 4 Last Rites"]
+    assert found.candidates[0].release_title.startswith("The.Conjuring.Last.Rites")
